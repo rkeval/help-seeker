@@ -1,8 +1,8 @@
-import { Platform } from "react-native";
+// The deployed site. Every build (Expo Go, simulators, store builds) talks to it unless told otherwise.
+export const LIVE_API_URL = "https://help-seeker.onrender.com";
 
-// Point this at your deployed server (HTTPS) for real builds:
-//   EXPO_PUBLIC_API_URL=https://your-host npx expo start
-// In development the default reaches a server running on your computer from the Android emulator
-// (10.0.2.2) or the iOS simulator (localhost). On a physical phone use your computer's LAN IP.
-export const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ?? (Platform.OS === "android" ? "http://10.0.2.2:3000" : "http://localhost:3000");
+// To develop against a server running on your own computer instead, set the address before starting Expo:
+//   EXPO_PUBLIC_API_URL=http://192.168.1.20:3000 npx expo start      (your computer's LAN IP, for a phone)
+//   EXPO_PUBLIC_API_URL=http://10.0.2.2:3000 npx expo start          (Android emulator)
+//   EXPO_PUBLIC_API_URL=http://localhost:3000 npx expo start         (iOS simulator)
+export const API_URL = (process.env.EXPO_PUBLIC_API_URL || LIVE_API_URL).replace(/\/$/, "");

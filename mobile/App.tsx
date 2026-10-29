@@ -17,6 +17,27 @@ export default function App() {
   return <SafeAreaProvider><Main /></SafeAreaProvider>;
 }
 
+// Shown while the app first contacts the server. On the free hosting plan the server sleeps when idle, so the very
+// first start can take up to a minute: say so instead of leaving a bare spinner.
+function StartingUp() {
+  const t = useTheme();
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setSlow(true), 5000);
+    return () => clearTimeout(id);
+  }, []);
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: t.bg, justifyContent: "center", padding: 24, gap: 8 }}>
+      <Loading />
+      {slow && (
+        <Text style={{ color: t.muted, textAlign: "center" }}>
+          Waking up the server… the first start can take up to a minute.
+        </Text>
+      )}
+    </SafeAreaView>
+  );
+}
+
 function Main() {
   const t = useTheme();
   const [ready, setReady] = useState(false);
@@ -82,7 +103,7 @@ function Main() {
     }
   };
 
-  if (!ready) return <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}><Loading /></SafeAreaView>;
+  if (!ready) return <StartingUp />;
   if (!meta) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: t.bg, padding: 24, justifyContent: "center", gap: 12 }}>
