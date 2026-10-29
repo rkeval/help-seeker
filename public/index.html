@@ -93,7 +93,7 @@
         <h2>My housekeeper profile</h2>
         <p class="muted">Your phone number is only shared with households whose request you accept.</p>
         <label>City / area <input name="city" required maxlength="100"></label>
-        <label>Phone <input name="phone" required pattern="[0-9+\-() ]{7,}" maxlength="30"></label>
+        <label>Phone <input name="phone" required pattern="[0-9+\-\(\) ]{7,}" maxlength="30"></label>
         <label>Rate per hour <input name="rate" type="number" min="0" step="1" required></label>
         <label>Years of experience <input name="exp" type="number" min="0" step="1" value="0"></label>
         <label>Availability <select name="avail" id="p-avail"></select></label>
@@ -112,7 +112,7 @@
   <dialog id="dlg">
     <form id="req-form" class="stack">
       <h3 id="dlg-title"></h3>
-      <label>Your phone <input name="phone" required pattern="[0-9+\-() ]{7,}" maxlength="30"></label>
+      <label>Your phone <input name="phone" required pattern="[0-9+\-\(\) ]{7,}" maxlength="30"></label>
       <label>When do you need help? <input name="when" placeholder="e.g. Mon–Fri mornings" maxlength="200"></label>
       <label>Details <textarea name="note" rows="3" maxlength="1000" placeholder="Tasks, home size, language…"></textarea></label>
       <div class="row">
