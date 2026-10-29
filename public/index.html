@@ -59,6 +59,7 @@
             <select name="role">
               <option value="seeker">household looking for help</option>
               <option value="housekeeper">housekeeper looking for work</option>
+              <option value="both">both: I hire help and offer my services</option>
             </select>
           </label>
           <label>Name <input name="name" autocomplete="name" required maxlength="100"></label>
@@ -91,6 +92,7 @@
     <section id="profile" hidden>
       <form id="profile-form" class="card stack">
         <h2>My housekeeper profile</h2>
+        <p class="muted">Offer your own services here. You can still hire other housekeepers with the same account.</p>
         <p class="muted">Your phone number is only shared with households whose request you accept.</p>
         <label>City / area <input name="city" required maxlength="100"></label>
         <label>Phone <input name="phone" required pattern="[0-9+\-\(\) ]{7,}" maxlength="30"></label>

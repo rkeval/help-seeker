@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
 import { api } from "../api";
-import type { Role, User } from "../types";
+import type { SignupRole, User } from "../types";
 import { Button, Chip, Field, Muted, useTheme } from "../ui";
 
 export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const t = useTheme();
   const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
-  const [role, setRole] = useState<Role>("seeker");
+  const [role, setRole] = useState<SignupRole>("seeker");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -47,6 +47,7 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
           <View style={{ flexDirection: "row", marginTop: 6 }}>
             <Chip label="Household" selected={role === "seeker"} onPress={() => setRole("seeker")} />
             <Chip label="Housekeeper" selected={role === "housekeeper"} onPress={() => setRole("housekeeper")} />
+            <Chip label="Both" selected={role === "both"} onPress={() => setRole("both")} />
           </View>
           <Field label="Name" value={name} onChangeText={setName} autoComplete="name" />
         </View>

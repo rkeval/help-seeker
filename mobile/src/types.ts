@@ -1,11 +1,12 @@
-export type Role = "seeker" | "housekeeper";
+export type Role = "seeker" | "housekeeper"; // only records what the person signed up for; anyone can hire and offer services
+export type SignupRole = Role | "both";
 export interface User { id: number; email: string; name: string; role: Role; emailVerified: boolean }
 export interface Profile {
   city: string; phone: string; rate: number; exp: number; avail: string; services: string[]; bio: string;
 }
 export interface Housekeeper {
   id: number; name: string; city: string; rate: number; exp: number; avail: string;
-  services: string[]; bio: string; rating: number | null; reviews: number;
+  services: string[]; bio: string; rating: number | null; reviews: number; mine: boolean;
 }
 export interface Meta { services: string[]; availability: string[] }
 export type RequestStatus = "pending" | "accepted" | "declined";

@@ -33,22 +33,20 @@ const guard = (fn) => async (e) => {
 function renderShell() {
   const u = me.user;
   $("#who").innerHTML = u
-    ? `<span class="muted">${esc(u.name)} (${u.role})</span><button class="ghost" id="logout">Sign out</button>`
+    ? `<span class="muted">${esc(u.name)}</span><button class="ghost" id="logout">Sign out</button>`
     : `<button id="signin">Sign in / Create account</button>`;
   const tabs = [["find", "Find a housekeeper"]];
-  if (u?.role === "housekeeper") tabs.push(["profile", "My profile"]);
+  if (u) tabs.push(["profile", me.profile ? "My profile" : "Offer my services"]);
   if (u) {
     const unread = me.unreadMessages ? ` (${me.unreadMessages} new)` : "";
-    tabs.push(["requests", (u.role === "housekeeper" ? "Incoming requests" : "My requests") + unread]);
+    tabs.push(["requests", "Requests" + unread]);
   }
   if (u) tabs.push(["account", "Account"]);
   $("#nav").innerHTML = tabs.map(([id, label]) => `<button data-tab="${id}" class="${id === tab ? "active" : ""}">${label}</button>`).join("");
   const needsVerify = !!u && !u.emailVerified;
   $("#verify-banner").hidden = !needsVerify;
   if (needsVerify) {
-    $("#verify-text").textContent = u.role === "housekeeper"
-      ? `Confirm your email (${u.email}) so households can find you and you can answer requests.`
-      : `Confirm your email (${u.email}) to contact housekeepers.`;
+    $("#verify-text").textContent = `Confirm your email (${u.email}) to contact housekeepers and answer requests.`;
   }
   for (const s of ["find", "auth", "forgot-section", "account", "profile", "requests"]) $("#" + s).hidden = s !== tab;
 }
@@ -97,7 +95,7 @@ $("#login-form").addEventListener("submit", guard(async (e) => {
 $("#register-form").addEventListener("submit", guard(async (e) => {
   await api("POST", "/api/register", Object.fromEntries(new FormData(e.target)));
   e.target.reset(); await refreshMe();
-  if (me.user.role === "housekeeper") { flash("Welcome! We emailed you a link to confirm your address. Fill in your profile meanwhile."); await show("profile"); }
+  if (me.user.role === "housekeeper") { flash("Welcome! We emailed you a link to confirm your address. Fill in your housekeeper profile meanwhile."); await show("profile"); }
   else { flash("Welcome! We emailed you a link to confirm your address."); await show("find"); }
 }));
 
@@ -128,7 +126,7 @@ async function loadResults() {
       <div>${h.services.map((s) => `<span class="tag">${esc(s)}</span>`).join("")}</div>
       <p>${esc(h.bio)}</p>
       <p class="rate">₹${h.rate}/hour</p>
-      ${me.user?.role === "seeker" ? `<button data-hk="${h.id}" data-name="${esc(h.name)}">Request contact</button>` : ""}
+      ${!me.user ? "" : h.mine ? `<p class="muted">This is you</p>` : `<button data-hk="${h.id}" data-name="${esc(h.name)}">Request contact</button>`}
     </article>`).join("") || `<p class="muted">No matches. Try loosening the filters.</p>`;
 }
 let debounce;
@@ -169,11 +167,8 @@ $("#profile-form").addEventListener("submit", guard(async (e) => {
 }));
 
 // ---------- requests ----------
-async function loadRequests() {
-  const isHk = me.user.role === "housekeeper";
-  $("#req-title").textContent = isHk ? "Incoming requests" : "My requests";
-  const list = await api("GET", "/api/requests");
-  $("#req-list").innerHTML = list.map((r) => `
+function requestCard(r, isHk) {
+  return `
     <div class="card">
       <strong>${esc(isHk ? r.seeker_name : r.hk_name)}</strong>
       <span class="badge ${r.status}">${r.status}</span>
@@ -185,7 +180,16 @@ async function loadRequests() {
       ${!isHk && r.status === "accepted" && !r.my_rating ? `<div class="actions"><select aria-label="Rating">${[5, 4, 3, 2, 1].map((n) => `<option value="${n}">${"★".repeat(n)}</option>`).join("")}</select><button data-review="${r.id}">Leave a review</button></div>` : ""}
       ${r.my_rating ? `<div class="muted">You rated this ${"★".repeat(r.my_rating)}</div>` : ""}
       ${r.status === "accepted" ? `<div class="actions"><button data-chat="${r.id}" data-name="${esc(isHk ? r.seeker_name : r.hk_name)}">Messages${r.unread ? ` (${r.unread} new)` : ""}</button></div>` : ""}
-    </div>`).join("") || `<p class="muted">Nothing here yet.</p>`;
+    </div>`;
+}
+async function loadRequests() {
+  const offers = !!me.profile;
+  $("#req-title").textContent = "Requests";
+  const sent = await api("GET", "/api/requests?as=sent");
+  const received = offers ? await api("GET", "/api/requests?as=received") : [];
+  const section = (title, list, isHk) =>
+    `<h3>${title}</h3>` + (list.map((r) => requestCard(r, isHk)).join("") || `<p class="muted">Nothing here yet.</p>`);
+  $("#req-list").innerHTML = (offers ? section("Requests I received", received, true) : "") + section("Requests I sent", sent, false);
 }
 $("#req-list").addEventListener("click", guard(async (e) => {
   const b = e.target.closest("button");

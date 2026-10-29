@@ -114,7 +114,7 @@ function Main() {
   }
 
   const tabs: [Tab, string][] = [["find", "Find"]];
-  if (user?.role === "housekeeper") tabs.push(["profile", "Profile"]);
+  if (user) tabs.push(["profile", profile ? "Profile" : "Offer services"]);
   if (user) tabs.push(["requests", unread ? `Requests (${unread})` : "Requests"], ["account", "Account"]);
 
   return (
@@ -130,9 +130,7 @@ function Main() {
       {user && !user.emailVerified && (
         <View style={{ margin: 12, padding: 12, gap: 8, borderRadius: 12, borderWidth: 1, borderColor: t.accent, backgroundColor: t.card }}>
           <Text style={{ color: t.fg }}>
-            {user.role === "housekeeper"
-              ? `Confirm your email (${user.email}) so households can find you and you can answer requests.`
-              : `Confirm your email (${user.email}) to contact housekeepers.`}
+            {`Confirm your email (${user.email}) to contact housekeepers and answer requests.`}
           </Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
             <View style={{ flex: 1 }}><Button title="Resend email" onPress={resendVerification} /></View>
@@ -144,11 +142,11 @@ function Main() {
       <View style={{ flex: 1 }}>
         {tab === "auth" && !user && <AuthScreen onSignedIn={signedIn} />}
         {(tab === "find" || (tab === "auth" && user)) && <FindScreen user={user} meta={meta} onNeedSignIn={() => setTab("auth")} />}
-        {tab === "profile" && user?.role === "housekeeper" && <ProfileScreen meta={meta} initial={profile} emailVerified={user.emailVerified} onSaved={() => void refresh()} />}
+        {tab === "profile" && user && <ProfileScreen meta={meta} initial={profile} emailVerified={user.emailVerified} onSaved={() => void refresh()} />}
         {tab === "account" && user && (
           <AccountScreen user={user} onSignOut={signOut} onDeleted={() => { setUser(null); setProfile(null); setTab("find"); }} />
         )}
-        {tab === "requests" && user && <RequestsScreen key={user.id} user={user} onUnreadChange={() => void refresh().catch(() => {})} />}
+        {tab === "requests" && user && <RequestsScreen key={user.id} offers={!!profile} user={user} onUnreadChange={() => void refresh().catch(() => {})} />}
       </View>
 
       <View style={{ flexDirection: "row", borderTopWidth: 1, borderColor: t.line, backgroundColor: t.card }}>

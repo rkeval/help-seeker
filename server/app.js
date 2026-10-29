@@ -87,8 +87,8 @@ async function createApp({
   };
 
   const routes = [];
-  const route = (method, pattern, handler, { auth: needAuth = false, role, verified = false } = {}) =>
-    routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)")}$`), handler, needAuth, role, verified });
+  const route = (method, pattern, handler, { auth: needAuth = false, verified = false } = {}) =>
+    routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)")}$`), handler, needAuth, verified });
 
   // Issues a fresh verification link (replacing any earlier one) and emails it. Mail failures are logged, not thrown,
   // so a flaky provider can't block sign-up; the user can ask for another email.
@@ -117,19 +117,22 @@ async function createApp({
     const name = str(body.name, 100, { required: true, label: "name" });
     const password = typeof body.password === "string" ? body.password : "";
     if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters");
-    if (!["seeker", "housekeeper"].includes(body.role)) throw bad("role must be seeker or housekeeper");
+    if (!["seeker", "housekeeper", "both"].includes(body.role)) throw bad("role must be seeker, housekeeper or both");
+    // `role` only records what the person said they wanted at sign-up. It decides nothing: anyone can hire, and
+    // anyone can add a housekeeper profile. "both" is stored as "housekeeper" (they set up a profile first).
+    const role = body.role === "both" ? "housekeeper" : body.role;
     if (await db.one("SELECT 1 FROM users WHERE email = $1", [email])) throw new HttpError(409, "email already registered");
     let row;
     try {
       row = await db.one("INSERT INTO users (email,name,role,pass_hash) VALUES ($1,$2,$3,$4) RETURNING id",
-        [email, name, body.role, auth.hashPassword(password)]);
+        [email, name, role, auth.hashPassword(password)]);
     } catch (e) {
       if (db.isUniqueViolation(e)) throw new HttpError(409, "email already registered"); // lost a race with another signup
       throw e;
     }
     setToken(await auth.createSession(db, row.id));
     await sendVerificationEmail({ id: row.id, email, name });
-    return [201, { id: row.id, email, name, role: body.role, emailVerified: false }];
+    return [201, { id: row.id, email, name, role, emailVerified: false }];
   });
 
   route("POST", "/api/login", async ({ body, ip, setToken }) => {
@@ -224,9 +227,7 @@ async function createApp({
 
   route("GET", "/api/me", async ({ user }) => {
     if (!user) return { user: null };
-    const profile = user.role === "housekeeper"
-      ? await db.one("SELECT city, phone, rate, exp, avail, services, bio FROM profiles WHERE user_id = $1", [user.id])
-      : null;
+    const profile = await db.one("SELECT city, phone, rate, exp, avail, services, bio FROM profiles WHERE user_id = $1", [user.id]);
     const unread = await db.one(
       `SELECT COUNT(*)::int AS n FROM messages m JOIN requests r ON r.id = m.request_id
        WHERE m.read_at IS NULL AND m.sender_id <> $1 AND (r.seeker_id = $1 OR r.hk_id = $1)`, [user.id]);
@@ -234,7 +235,7 @@ async function createApp({
   });
 
   // ---- housekeepers ----
-  route("GET", "/api/housekeepers", async ({ query }) => {
+  route("GET", "/api/housekeepers", async ({ query, user }) => {
     const { service, city, maxRate, avail, sort } = Object.fromEntries(query);
     const where = ["u.email_verified_at IS NOT NULL"], params = [];
     const add = (sql, v) => { params.push(v); where.push(sql.replace("?", `$${params.length}`)); };
@@ -247,9 +248,10 @@ async function createApp({
       exp: "p.exp DESC",
       rating: "r.avg DESC NULLS LAST",
     }[sort] || "r.avg DESC NULLS LAST";
+    params.push(user ? user.id : 0); // `mine`: lets the apps show "this is you" instead of a contact button on your own card
     const rows = await db.query(
       `SELECT p.user_id AS id, u.name, p.city, p.rate, p.exp, p.avail, p.services, p.bio,
-              ROUND(r.avg::numeric, 1)::float8 AS rating, COALESCE(r.n, 0) AS reviews
+              ROUND(r.avg::numeric, 1)::float8 AS rating, COALESCE(r.n, 0) AS reviews, (p.user_id = $${params.length}) AS mine
        FROM profiles p
        JOIN users u ON u.id = p.user_id
        LEFT JOIN (SELECT hk_id, AVG(rating) AS avg, COUNT(*)::int AS n FROM reviews GROUP BY hk_id) r ON r.hk_id = p.user_id
@@ -278,11 +280,12 @@ async function createApp({
         JSON.stringify(services), str(body.bio, 1000)]
     );
     return { ok: true };
-  }, { auth: true, role: "housekeeper" });
+  }, { auth: true });
 
   // ---- requests ----
   route("POST", "/api/requests", async ({ user, body }) => {
     const hkId = toId(body.housekeeperId);
+    if (hkId === user.id) throw bad("You can't send a request to yourself.");
     if (!hkId || !(await db.one("SELECT 1 FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = $1 AND u.email_verified_at IS NOT NULL", [hkId]))) throw new HttpError(404, "housekeeper not found");
     const phone = str(body.phone, 30, { required: true, label: "phone" });
     if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone");
@@ -296,10 +299,15 @@ async function createApp({
       if (db.isUniqueViolation(e)) throw new HttpError(409, "you already have a pending request with this housekeeper");
       throw e;
     }
-  }, { auth: true, role: "seeker", verified: true });
+  }, { auth: true, verified: true });
 
-  route("GET", "/api/requests", async ({ user }) => {
-    if (user.role === "seeker") {
+  // `as=sent`: requests I made as a household. `as=received`: requests made to me as a housekeeper. A person can be both,
+  // so the apps ask for each list explicitly; without `as` the old behaviour (by sign-up role) is kept for older app builds.
+  route("GET", "/api/requests", async ({ user, query }) => {
+    const as = query.get("as");
+    if (as !== null && !["sent", "received"].includes(as)) throw bad("as must be sent or received");
+    const view = as || (user.role === "housekeeper" ? "received" : "sent");
+    if (view === "sent") {
       return db.query(
         `SELECT r.id, r.status, r.when_text AS "when", r.note, r.created_at, r.hk_id, u.name AS hk_name,
            CASE WHEN r.status = 'accepted' THEN p.phone END AS hk_phone,
@@ -329,7 +337,7 @@ async function createApp({
     if (done) return { ok: true };
     const exists = id && await db.one("SELECT 1 FROM requests WHERE id = $1 AND hk_id = $2", [id, user.id]);
     throw exists ? new HttpError(409, "request already answered") : new HttpError(404, "request not found");
-  }, { auth: true, role: "housekeeper", verified: true });
+  }, { auth: true, verified: true });
 
   route("POST", "/api/requests/:id/review", async ({ user, body, params }) => {
     const id = toId(params.id);
@@ -346,7 +354,7 @@ async function createApp({
       throw e;
     }
     return [201, { ok: true }];
-  }, { auth: true, role: "seeker" });
+  }, { auth: true });
 
   // ---- messages: a conversation lives inside an accepted request, between exactly its two people ----
   // Non-participants get 404 (not 403) so request ids can't be probed. Messaging opens when the housekeeper accepts,
@@ -415,7 +423,6 @@ async function createApp({
     }
     if (!matched) throw new HttpError(pathMatch ? 405 : 404, pathMatch ? "method not allowed" : "not found");
     if (matched.needAuth && !user) throw new HttpError(401, "sign in required");
-    if (matched.role && user.role !== matched.role) throw new HttpError(403, `only ${matched.role}s can do this`);
     if (matched.verified && !user.emailVerified) {
       throw new HttpError(403, "Please verify your email address first. We sent you a link when you signed up.", "email_not_verified");
     }
