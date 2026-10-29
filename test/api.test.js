@@ -748,3 +748,62 @@ test("one person can be both: hire housekeepers and offer their own services fro
   assert.deepEqual((await ben("GET", "/api/requests?as=received")).body, []);
   assert.deepEqual((await anon("GET", "/api/housekeepers")).body.map((h) => h.name).sort(), ["Ben", "Cara"]);
 });
+
+test("sample data: only the confirmed owner can add/remove it and see it; nobody else can find, contact or sign in as it", async (t) => {
+  const { server, client, register, mails, db } = await start({ adminEmail: "Owner@x.com" });
+  t.after(() => server.close());
+  const anon = client(), owner = client(), other = client(), imposter = client();
+  const sample = (c, action) => c("POST", "/api/admin/sample-data", { action });
+
+  // Someone who typed the owner's address but never confirmed it is not the owner.
+  assert.equal((await imposter("POST", "/api/register", { email: "owner@x.com", name: "Imposter", password: "password123", role: "seeker" })).status, 201);
+  assert.equal((await sample(imposter, "add")).status, 404);
+  assert.equal((await imposter("GET", "/api/me")).body.isAdmin, undefined);
+  await db.query("DELETE FROM users WHERE email = 'owner@x.com'");
+
+  await register(owner, { email: "owner@x.com", name: "Owner", password: "password123", role: "seeker" });
+  await register(other, { email: "o@x.com", name: "Otto", password: "password123", role: "seeker" });
+  assert.equal((await owner("GET", "/api/me")).body.isAdmin, true);
+  assert.equal((await other("GET", "/api/me")).body.isAdmin, undefined);
+  assert.equal((await sample(other, "add")).status, 404);   // plain 404, as if the route didn't exist
+  assert.equal((await sample(anon, "add")).status, 404);
+  assert.equal((await sample(owner, "nonsense")).status, 400);
+
+  const real = client();
+  await register(real, { email: "real@x.com", name: "Real Hk", password: "password123", role: "housekeeper" });
+  await real("PUT", "/api/profile", profile);
+
+  let r = await sample(owner, "add");
+  assert.equal(r.status, 200); assert.equal(r.body.sampleHousekeepers, 12);
+  assert.equal((await sample(owner, "add")).body.sampleHousekeepers, 12);             // repeating changes nothing
+  assert.equal((await owner("GET", "/api/me")).body.sampleHousekeepers, 12);
+
+  const seen = async (c) => (await c("GET", "/api/housekeepers")).body;
+  const ownerList = await seen(owner);
+  assert.equal(ownerList.length, 13); assert.equal(ownerList.filter((h) => h.sample).length, 12);
+  for (const c of [anon, other, real]) { const l = await seen(c); assert.deepEqual(l.map((h) => h.name), ["Real Hk"]); assert.ok(l.every((h) => !h.sample)); }
+
+  const sampleId = ownerList.find((h) => h.sample).id;
+  const ask = { housekeeperId: sampleId, phone: "98765 43210" };
+  assert.equal((await other("POST", "/api/requests", ask)).status, 404);              // can't guess an id and contact one
+  assert.equal((await owner("POST", "/api/requests", ask)).status, 201);              // the owner can try the flow
+
+  // Nobody can sign in as a sample person, and nobody can register one of their addresses.
+  assert.equal((await anon("POST", "/api/login", { email: "sara@dummy.test", password: "demo-pass-123" })).status, 401);
+  assert.equal((await anon("POST", "/api/register", { email: "new@dummy.test", name: "X", password: "password123", role: "seeker" })).status, 400);
+
+  r = await sample(owner, "remove");
+  assert.equal(r.status, 200); assert.equal(r.body.sampleHousekeepers, 0);
+  assert.deepEqual((await seen(owner)).map((h) => h.name), ["Real Hk"]);
+  assert.ok(await db.one("SELECT 1 FROM users WHERE email = 'real@x.com'"));          // real accounts survive
+  assert.ok(await db.one("SELECT 1 FROM users WHERE email = 'o@x.com'"));
+});
+
+test("sample data: with no ADMIN_EMAIL configured nobody is the owner", async (t) => {
+  const { server, client, register } = await start({ adminEmail: "" });
+  t.after(() => server.close());
+  const c = client();
+  await register(c, { email: "owner@x.com", name: "Owner", password: "password123", role: "seeker" });
+  assert.equal((await c("POST", "/api/admin/sample-data", { action: "add" })).status, 404);
+  assert.equal((await c("GET", "/api/me")).body.isAdmin, undefined);
+});

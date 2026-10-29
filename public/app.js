@@ -57,6 +57,20 @@ async function show(next) {
   if (tab === "find") await loadResults();
   if (tab === "requests") await loadRequests();
   if (tab === "profile") fillProfile();
+  if (tab === "account") renderAdmin();
+}
+
+// ---------- owner-only sample data ----------
+function renderAdmin() {
+  $("#admin-card").hidden = !me.isAdmin;
+  if (me.isAdmin) $("#sample-status").textContent = me.sampleHousekeepers ? `${me.sampleHousekeepers} sample housekeepers are on the site (visible only to you).` : "No sample data right now.";
+}
+for (const action of ["add", "remove"]) {
+  $("#sample-" + action).addEventListener("click", guard(async () => {
+    await api("POST", "/api/admin/sample-data", { action });
+    await refreshMe(); renderAdmin();
+    flash(action === "add" ? "Sample data added. Only you can see it." : "Sample data removed.");
+  }));
 }
 
 async function refreshMe() {
@@ -121,7 +135,7 @@ async function loadResults() {
   $("#count").textContent = `${list.length} housekeeper${list.length === 1 ? "" : "s"} found`;
   $("#results").innerHTML = list.map((h) => `
     <article class="card hk">
-      <h3>${esc(h.name)}</h3>
+      <h3>${esc(h.name)}${h.sample ? ` <span class="tag">sample</span>` : ""}</h3>
       <div class="meta">${esc(h.city)} · ${esc(h.avail)} · ${h.exp} yrs · ${h.rating ? `★ ${h.rating} (${h.reviews})` : "No reviews yet"}</div>
       <div>${h.services.map((s) => `<span class="tag">${esc(s)}</span>`).join("")}</div>
       <p>${esc(h.bio)}</p>

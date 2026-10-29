@@ -40,6 +40,7 @@ Local Postgres in the cloud container: `pg_ctlcluster 16 main start`; role `hs` 
 - Never leak phone numbers or emails in public responses; a housekeeper's phone is revealed only after they accept a request.
 - Messaging lives inside an accepted request. Non-participants get `404` (never `403`) so ids can't be probed; messages are rendered as text only (web: text nodes, mobile: `<Text>`), never as HTML. Reading a conversation marks only the *other* person's messages read.
 - One account can both hire and offer services. `users.role` only records what the person chose at sign-up (`both` is stored as `housekeeper`) and gates nothing: ownership is enforced by the queries (`hk_id`/`seeker_id`), and you can't request yourself. `GET /api/requests?as=sent|received` picks the list.
+- Sample (dummy) data lives in `server/dummy.js`; every sample email ends in `@dummy.test`. Only the owner (`ADMIN_EMAIL`, email confirmed) sees it and can add/remove it (`POST /api/admin/sample-data`, plain `404` for anyone else). It is hidden from every other list, can't be contacted, can't be signed in to (random password) and can't be registered. Any new public listing or contact path must exclude it.
 - Gated actions return `403` with `code: "email_not_verified"` for unconfirmed accounts.
 - Web UI escapes all user text (`esc()`); mobile renders text via React Native (no HTML).
 - New behaviour needs a test; a guard that protects security or data should be mutation-checked (break it on purpose, see the test fail, restore).
