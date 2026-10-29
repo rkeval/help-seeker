@@ -3,36 +3,60 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Choose a new password – Help Seeker</title>
+  <title data-i18n="reset.title">Choose a new password – Help Seeker</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header><h1>Help Seeker</h1></header>
+  <header><div class="top"><h1>Help Seeker</h1><div id="lang-slot"></div></div></header>
   <main>
     <p id="msg" class="msg" role="status" hidden></p>
     <form id="reset-form" class="card stack">
-      <h2>Choose a new password</h2>
-      <label>New password (8+ characters) <input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
-      <button type="submit">Save new password</button>
+      <h2 data-i18n="reset.heading">Choose a new password</h2>
+      <label><span data-i18n="reset.password">New password (8+ characters)</span> <input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
+      <button type="submit" data-i18n="reset.submit">Save new password</button>
     </form>
-    <p id="done" hidden>Your password has been changed and you've been signed out everywhere. <a href="/">Go to sign in</a>. If you use the mobile app, just open it and sign in.</p>
+    <p id="done" hidden></p>
   </main>
+  <script src="i18n/core.js"></script>
+  <script src="i18n/web.js"></script>
   <script>
     const token = new URLSearchParams(location.search).get("token") || "";
     const msg = document.getElementById("msg");
     const form = document.getElementById("reset-form");
-    if (!token) { msg.textContent = "This reset link is missing its token. Request a new one."; msg.className = "msg err"; msg.hidden = false; form.hidden = true; }
+    const done = document.getElementById("done");
+    const t = (k, p) => I18n.t(k, p);
+    let showMsg = null; // function producing the current message, re-run when the language changes
+
+    function setMsg(fn) {
+      showMsg = fn;
+      msg.hidden = !fn;
+      if (fn) { msg.textContent = fn(); msg.className = "msg err"; }
+    }
+    function drawDone() { // sentence with a {link} placeholder; the anchor is a DOM node, never translated HTML
+      const [before, after] = t("reset.done", { link: "\u0001" }).split("\u0001");
+      const a = document.createElement("a");
+      a.href = "/"; a.textContent = t("reset.done_link");
+      done.replaceChildren(before, a, after || "");
+    }
+    I18n.onChange(() => { if (showMsg) setMsg(showMsg); if (!done.hidden) drawDone(); });
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      msg.hidden = true;
+      setMsg(null);
       const res = await fetch("/api/password-reset/confirm", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", "Accept-Language": I18n.lang },
         body: JSON.stringify({ token, password: form.elements.password.value }),
       });
-      if (res.ok) { form.hidden = true; document.getElementById("done").hidden = false; history.replaceState(null, "", "/reset.html"); return; }
+      if (res.ok) { form.hidden = true; done.hidden = false; drawDone(); history.replaceState(null, "", "/reset.html"); return; }
       const data = await res.json().catch(() => ({}));
-      msg.textContent = data.error || "Something went wrong."; msg.className = "msg err"; msg.hidden = false;
+      setMsg(() => I18n.errorMessage(data));
     });
+
+    (async () => {
+      await I18n.init();
+      I18n.mountPicker(document.getElementById("lang-slot"));
+      if (!token) { setMsg(() => t("reset.no_token")); form.hidden = true; }
+    })();
   </script>
 </body>
 </html>

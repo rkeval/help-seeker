@@ -7,6 +7,7 @@ The owner decides *what the product does*; engineering decisions are made by the
 - `server/`: plain Node `http` server, no framework. `app.js` (routes), `auth.js`, `db.js` (schema, created on startup with `IF NOT EXISTS`), `mail.js`, `seed.js`.
 - `public/`: the website (plain HTML/CSS/JS, no build step). `verify.html` and `reset.html` are the emailed-link pages.
 - `mobile/`: Expo / React Native app (TypeScript) using the same API. Token auth (`Authorization: Bearer`, only issued when the request sends `X-Client: mobile`). It talks to the live site by default (`mobile/src/config.ts`, `LIVE_API_URL`); `EXPO_PUBLIC_API_URL` overrides it (the e2e runner and local development use that). Requests time out after 90 s and the first screen explains the free-tier cold start.
+- `public/i18n/`: the translations (`<code>.json`, English is the reference), `core.js` (shared by server, website and app) and `web.js` (website glue). `mobile/src/i18n/shared/` is a generated copy for the app (`npm run i18n:sync`; a test fails when stale). `mobile/src/i18n/index.tsx`: provider + `useI18n()`.
 - `test/api.test.js`: API tests against real Postgres; each test gets its own schema.
 - `e2e/`: browser end-to-end regression (`e2e/run.sh`).
 - `.github/workflows/ci.yml`: runs the API tests (Postgres service) and the mobile typecheck + bundle.
@@ -45,6 +46,12 @@ Local Postgres in the cloud container: `pg_ctlcluster 16 main start`; role `hs` 
 - Web UI escapes all user text (`esc()`); mobile renders text via React Native (no HTML).
 - New behaviour needs a test; a guard that protects security or data should be mutation-checked (break it on purpose, see the test fail, restore).
 - Schema changes: add `ALTER TABLE … ADD COLUMN IF NOT EXISTS` / `CREATE … IF NOT EXISTS` in `db.js` so existing databases upgrade on startup, and say in the PR what happens to existing rows.
+
+- **All UI text goes through the translation function** (web: `I18n.t("key", {named})` or `data-i18n`/`data-i18n-placeholder`/`data-i18n-aria-label` in HTML, never a literal English string; app: `useI18n().t`). Add the key to `public/i18n/en.json` **and every other language file** in the same PR, then `npm run i18n:sync`; `test/i18n.test.js` fails otherwise (missing key, missing `{placeholder}`, untranslated sentence, missing plural form). Sentences are whole messages with named placeholders, never concatenated fragments; counts use plural objects (`{"one": ..., "other": ...}`). Services/availability are English keys in the API and DB: display with `label("service.", s)`, never store a translated value. User-written text is never translated; the web still escapes it (`esc()`), the app renders it in `<Text>`.
+- **Every API error has a code.** `new HttpError(status, englishText, code, params?)` / `bad(text, code, params?)` where the code is in `ERROR_CODES` and has an `err.<code>` message in all languages. Keep `error` text and status unchanged. Clients show the translated message for non-English languages and the server's text for English.
+- Text limits count grapheme clusters (`str()` on the server, `data-max` on the web, `maxChars` in the app); don't use `maxlength`/`maxLength` or `.slice` on user text. Compare/search user text in NFC (`i18n.nfc`, SQL `normalize(col, NFC)`), never rewrite what was stored. Format money/numbers/dates with `I18n.rupees/dateTime` (Latin digits, `₹1,50,000`), not `toLocaleString()`.
+- Language is sent as `Accept-Language`; the server only ever uses it to pick one of the ten allow-listed templates (`i18n.negotiate`) and stores nothing. Adding a language: see README, "Languages".
+- The sign-in rate limiter allows 20 attempts per client address: browser e2e steps that sign in/register a lot use their own `X-Forwarded-For` (the web run trusts it).
 
 ## Gotchas learned the hard way
 - Don't `pkill -f <name>`: the pattern matches your own shell command and kills it. Kill by PID, or anchor the pattern (`pgrep -f "^node server/index"`).

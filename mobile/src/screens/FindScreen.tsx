@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, FlatList, Modal, ScrollView, Text, View } from "react-native";
 import { api } from "../api";
+import { useI18n } from "../i18n";
 import type { Housekeeper, Meta, User } from "../types";
 import { Button, Card, Chip, Field, Loading, Muted, useTheme } from "../ui";
 
-const SORTS = [["rating", "Top rated"], ["rate", "Lowest rate"], ["exp", "Experience"]] as const;
+const SORTS = [["rating", "sort.rating"], ["rate", "sort.rate"], ["exp", "sort.exp"]] as const;
 
 export default function FindScreen({ user, meta, onNeedSignIn }: { user: User | null; meta: Meta; onNeedSignIn: () => void }) {
   const t = useTheme();
+  const { t: tx, label, rupees } = useI18n();
   const [service, setService] = useState("");
   const [city, setCity] = useState("");
   const [sort, setSort] = useState<string>("rating");
@@ -19,10 +21,10 @@ export default function FindScreen({ user, meta, onNeedSignIn }: { user: User | 
     try {
       setList(await api.housekeepers({ service, city: city.trim(), sort }));
     } catch (e) {
-      Alert.alert("Couldn't load", (e as Error).message);
+      Alert.alert(tx("common.load_failed"), (e as Error).message);
       setList((l) => l ?? []);
     }
-  }, [service, city, sort]);
+  }, [service, city, sort, tx]);
 
   useEffect(() => {
     const id = setTimeout(load, 250); // debounce typing in the city box
@@ -33,12 +35,12 @@ export default function FindScreen({ user, meta, onNeedSignIn }: { user: User | 
     <View style={{ flex: 1 }}>
       <View style={{ padding: 12, gap: 8 }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <Chip label="Any service" selected={!service} onPress={() => setService("")} />
-          {meta.services.map((s) => <Chip key={s} label={s} selected={service === s} onPress={() => setService(s)} />)}
+          <Chip label={tx("filter.any_service")} selected={!service} onPress={() => setService("")} />
+          {meta.services.map((s) => <Chip key={s} label={label("service.", s)} selected={service === s} onPress={() => setService(s)} />)}
         </ScrollView>
-        <Field label="City / area" value={city} onChangeText={setCity} placeholder="e.g. Pune" />
-        <View style={{ flexDirection: "row" }}>
-          {SORTS.map(([k, label]) => <Chip key={k} label={label} selected={sort === k} onPress={() => setSort(k)} />)}
+        <Field label={tx("filter.city")} value={city} onChangeText={setCity} placeholder={tx("filter.city_ph")} maxChars={100} />
+        <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
+          {SORTS.map(([k, key]) => <Chip key={k} label={tx(key)} selected={sort === k} onPress={() => setSort(k)} />)}
         </View>
       </View>
 
@@ -49,21 +51,21 @@ export default function FindScreen({ user, meta, onNeedSignIn }: { user: User | 
           contentContainerStyle={{ padding: 12, gap: 10 }}
           refreshing={refreshing}
           onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }}
-          ListEmptyComponent={<Muted>No matches. Try loosening the filters.</Muted>}
+          ListEmptyComponent={<Muted>{tx("results.none")}</Muted>}
           renderItem={({ item: h }) => (
             <Card>
               <Text style={{ color: t.fg, fontSize: 18, fontWeight: "600" }}>{h.name}</Text>
               <Muted>
-                {h.city} · {h.avail} · {h.exp} yrs · {h.rating ? `★ ${h.rating} (${h.reviews})` : "No reviews yet"}
+                {h.city} · {label("avail.", h.avail)} · {tx("hk.years", { n: h.exp })} · {h.rating ? `★ ${h.rating} (${h.reviews})` : tx("hk.no_reviews")}
               </Muted>
               <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 4 }}>
-                {h.services.map((s) => <Chip key={s} label={s} />)}
+                {h.services.map((s) => <Chip key={s} label={label("service.", s)} />)}
               </View>
               {!!h.bio && <Text style={{ color: t.fg }}>{h.bio}</Text>}
-              <Text style={{ color: t.fg, fontWeight: "600" }}>₹{h.rate}/hour</Text>
+              <Text style={{ color: t.fg, fontWeight: "600" }}>{tx("hk.rate", { rate: rupees(h.rate) })}</Text>
               {h.mine
-                ? <Muted>This is you</Muted>
-                : <Button title="Request contact" onPress={() => (user ? setTarget(h) : onNeedSignIn())} />}
+                ? <Muted>{tx("hk.is_you")}</Muted>
+                : <Button title={tx("hk.request_contact")} onPress={() => (user ? setTarget(h) : onNeedSignIn())} />}
             </Card>
           )}
         />
@@ -76,6 +78,7 @@ export default function FindScreen({ user, meta, onNeedSignIn }: { user: User | 
 
 function RequestModal({ hk, onClose }: { hk: Housekeeper; onClose: () => void }) {
   const t = useTheme();
+  const { t: tx } = useI18n();
   const [phone, setPhone] = useState("");
   const [when, setWhen] = useState("");
   const [note, setNote] = useState("");
@@ -85,10 +88,10 @@ function RequestModal({ hk, onClose }: { hk: Housekeeper; onClose: () => void })
     setBusy(true);
     try {
       await api.sendRequest({ housekeeperId: hk.id, phone, when, note });
-      Alert.alert("Request sent", `You'll see ${hk.name}'s phone number once they accept.`);
+      Alert.alert(tx("dlg.sent_title"), tx("dlg.sent", { name: hk.name }));
       onClose();
     } catch (e) {
-      Alert.alert("Couldn't send", (e as Error).message);
+      Alert.alert(tx("common.send_failed"), (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -97,12 +100,12 @@ function RequestModal({ hk, onClose }: { hk: Housekeeper; onClose: () => void })
   return (
     <Modal animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <ScrollView style={{ backgroundColor: t.bg }} contentContainerStyle={{ padding: 20, gap: 14 }} keyboardShouldPersistTaps="handled">
-        <Text style={{ color: t.fg, fontSize: 20, fontWeight: "700" }}>Request {hk.name}</Text>
-        <Field label="Your phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-        <Field label="When do you need help?" value={when} onChangeText={setWhen} placeholder="e.g. Mon–Fri mornings" />
-        <Field label="Details" value={note} onChangeText={setNote} multiline placeholder="Tasks, home size, language…" />
-        <Button title="Send request" onPress={send} disabled={busy} />
-        <Button title="Cancel" kind="ghost" onPress={onClose} />
+        <Text style={{ color: t.fg, fontSize: 20, fontWeight: "700" }}>{tx("dlg.title", { name: hk.name })}</Text>
+        <Field label={tx("dlg.phone")} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+        <Field label={tx("dlg.when")} value={when} onChangeText={setWhen} placeholder={tx("dlg.when_ph")} maxChars={200} />
+        <Field label={tx("dlg.note")} value={note} onChangeText={setNote} multiline placeholder={tx("dlg.note_ph")} maxChars={1000} />
+        <Button title={tx("dlg.submit")} onPress={send} disabled={busy} />
+        <Button title={tx("common.cancel")} kind="ghost" onPress={onClose} />
       </ScrollView>
     </Modal>
   );

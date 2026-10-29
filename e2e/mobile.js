@@ -14,8 +14,8 @@ const tokenFor = (email) => {
 
 (async () => {
   const browser = await chromium.launch();
-  const open = async () => {
-    const ctx = await browser.newContext({ viewport: { width: 400, height: 800 } }); const p = await ctx.newPage();
+  const open = async (opts = {}) => {
+    const ctx = await browser.newContext({ viewport: { width: 400, height: 800 }, ...opts }); const p = await ctx.newPage();
     p.on('pageerror', e => errors.push(e.message));
     p.on('console', m => m.type() === 'error' && !/status of 4\d\d/.test(m.text()) && errors.push('console: ' + m.text()));
     await p.goto(APP); await p.waitForSelector('text=Help Seeker'); return p;
@@ -44,6 +44,81 @@ const tokenFor = (email) => {
   await step('forgot password: asks for the email and says a link is on its way', async () => {
     await tapText(mia, 'Forgot password?'); await fill(mia, 'Email', 'nobody@example.com'); await tapText(mia, 'Send reset link');
     await waitAlert(mia, /Check your email: If that email has an account/);
+  });
+
+  console.log('\nLanguages');
+  const L = (lang) => JSON.parse(fs.readFileSync(require('path').join(__dirname, '..', 'public', 'i18n', lang + '.json'), 'utf8'));
+  const hi = L('hi'), mr = L('mr'), ml = L('ml'), ta = L('ta');
+  const visible = (p, text) => p.getByText(text, { exact: true }).first().waitFor({ timeout: 8000 });
+  const stored = (p) => p.evaluate(() => localStorage.getItem('hs-lang'));
+  const lastSubmit = (p, text) => p.locator(`xpath=(//*[normalize-space()="${text}"])[last()]`).click();
+  await step('English by default; the sign-in screen offers every language in its own script', async () => {
+    await tapText(mia, 'Sign in'); await mia.waitForSelector('text=Forgot password?');
+    for (const name of ['English', 'हिन्दी', 'मराठी', 'বাংলা', 'தமிழ்', 'తెలుగు', 'ಕನ್ನಡ', 'മലയാളം', 'ગુજરાતી', 'ਪੰਜਾਬੀ']) assert.ok(await mia.getByText(name, { exact: true }).count() >= 1, name);
+    assert.equal(await stored(mia), null);
+  });
+  await step('tapping Hindi changes the sign-in screen at once, keeps typed text, and is remembered', async () => {
+    await fill(mia, 'Email', 'typed@x.com');
+    await tapText(mia, 'हिन्दी');
+    await visible(mia, hi['login.forgot']); await visible(mia, hi['app.tagline']);
+    assert.equal(await field(mia, hi['field.email']).inputValue(), 'typed@x.com');
+    assert.equal(await stored(mia), 'hi');
+  });
+  await step('the choice survives restarting the app', async () => {
+    await mia.reload(); await mia.waitForSelector('text=Help Seeker');
+    await tapText(mia, hi['auth.signin']); await visible(mia, hi['login.forgot']);
+  });
+  await step('server errors come back in Hindi; the alert title and message are both translated', async () => {
+    await fill(mia, hi['field.email'], 'nobody@example.com'); await fill(mia, hi['field.password_new'], 'wrong-password-1'); await lastSubmit(mia, hi['auth.signin']);
+    await waitAlert(mia, new RegExp(hi['auth.cant_continue'] + ': ' + hi['err.wrong_credentials']));
+  });
+  await step('forgot password in Hindi: the confirmation is the app\'s own Hindi text', async () => {
+    await tapText(mia, hi['login.forgot']); await fill(mia, hi['field.email'], 'nobody@example.com'); await tapText(mia, hi['forgot.submit']);
+    await waitAlert(mia, new RegExp(hi['register.check_email_title'] + ': ' + hi['forgot.sent'].slice(0, 12)));
+  });
+  await step('Marathi from the header: Find screen is translated, service search still works, names and ₹ stay as written', async () => {
+    await mia.reload(); await mia.waitForSelector('text=Help Seeker');
+    await tapText(mia, 'हिन्दी ▾'); await mia.getByText('मराठी', { exact: true }).last().click(); await mia.getByText(mr['common.close'], { exact: true }).last().click();
+    await visible(mia, mr['filter.any_service']); await visible(mia, mr['tab.find']);
+    await mia.waitForSelector('text=Sunita Devi');
+    if (process.env.E2E_SHOTS) await mia.screenshot({ path: process.env.E2E_SHOTS + '/mobile-marathi.png' });
+    assert.ok(await mia.getByText('₹150/' + mr['hk.rate'].split('/')[1]).first().isVisible(), 'rupee rate with normal digits');
+    const all = await mia.getByText(mr['hk.request_contact'], { exact: true }).count();
+    await tapText(mia, mr['service.Cooking']); await mia.waitForTimeout(700);
+    const cooks = await mia.getByText(mr['hk.request_contact'], { exact: true }).count();
+    assert.ok(cooks > 0 && cooks < all, `service filter in Marathi: ${cooks} of ${all}`);
+    await tapText(mia, mr['filter.any_service']); await mia.waitForTimeout(500);
+    assert.equal(await mia.getByText(mr['hk.request_contact'], { exact: true }).count(), all);
+  });
+  await step('Tamil: long words fit a 360px phone (nothing sideways, no clipped button text)', async () => {
+    const p = await open({ viewport: { width: 360, height: 740 } });
+    await tapText(p, 'Sign in'); await p.waitForSelector('text=Forgot password?'); await tapText(p, 'தமிழ்'); await visible(p, ta['login.forgot']);
+    const check = async (where) => {
+      const bad = await p.evaluate(() => {
+        const out = [];
+        if (document.documentElement.scrollWidth > window.innerWidth) out.push('page scrolls sideways');
+        for (const el of document.querySelectorAll('[role=button], [role=tab], input, textarea')) {
+          const r = el.getBoundingClientRect(); if (r.width === 0) continue;
+          if (r.right > window.innerWidth + 1 || r.left < -1) out.push('outside: ' + (el.innerText || el.getAttribute('aria-label') || '').slice(0, 30));
+          if (el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== 'visible') out.push('clipped: ' + (el.innerText || '').slice(0, 30));
+          if (r.height < 40 && el.getAttribute('role') !== 'tab') out.push('small target: ' + Math.round(r.height) + ' ' + (el.innerText || el.getAttribute('aria-label') || '').slice(0, 20));
+        }
+        return out;
+      });
+      assert.deepEqual(bad, [], where);
+    };
+    await check('sign in'); await tapText(p, ta['register.new_here']); await check('create account');
+    await p.close();
+  });
+  await step('a first run follows the phone\'s language list when supported, otherwise English', async () => {
+    for (const [locale, signIn, tagline] of [['ta-IN', ta['auth.signin'], ta['app.tagline']], ['fr-FR', 'Sign in', L('en')['app.tagline']], ['ml', ml['auth.signin'], ml['app.tagline']]]) {
+      const p = await open({ locale }); await tapText(p, signIn);
+      await visible(p, tagline); await p.close();
+    }
+  });
+  await step('back to English for the rest of the run', async () => {
+    await mia.reload(); await mia.waitForSelector('text=Help Seeker'); await tapText(mia, 'मराठी ▾'); await mia.getByText('English', { exact: true }).last().click(); await mia.getByText('Close', { exact: true }).last().click();
+    await visible(mia, 'Any service'); assert.equal(await stored(mia), 'en');
   });
 
   console.log('\nHousekeeper (Mia)');

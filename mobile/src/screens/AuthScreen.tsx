@@ -2,10 +2,12 @@ import { useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
 import { api } from "../api";
 import type { SignupRole, User } from "../types";
-import { Button, Chip, Field, Muted, useTheme } from "../ui";
+import { useI18n } from "../i18n";
+import { Button, Chip, Field, LanguagePicker, Muted, useTheme } from "../ui";
 
 export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const t = useTheme();
+  const { t: tx } = useI18n();
   const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
   const [role, setRole] = useState<SignupRole>("seeker");
   const [name, setName] = useState("");
@@ -18,7 +20,7 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
     try {
       if (mode === "forgot") {
         const r = await api.requestPasswordReset(email);
-        Alert.alert("Check your email", `${r.message}\n\nOpen the link on this phone, choose a new password, then sign in here.`);
+        Alert.alert(tx("register.check_email_title"), `${tx("forgot.sent")}\n\n${tx("forgot.sent_mobile")}`);
         setMode("login");
         return;
       }
@@ -26,11 +28,11 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
         ? await api.login({ email, password })
         : await api.register({ role, name, email, password });
       if (mode === "register") {
-        Alert.alert("Check your email", `We sent a confirmation link to ${user.email}. Open it to finish setting up your account.`);
+        Alert.alert(tx("register.check_email_title"), tx("register.check_email", { email: user.email }));
       }
       onSignedIn();
     } catch (e) {
-      Alert.alert("Couldn't continue", (e as Error).message);
+      Alert.alert(tx("auth.cant_continue"), (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -38,30 +40,31 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
 
   return (
     <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }} keyboardShouldPersistTaps="handled">
-      <Text style={{ color: t.fg, fontSize: 28, fontWeight: "700", marginTop: 24 }}>Help Seeker</Text>
-      <Muted>Find trusted housekeepers for cleaning, dishwashing, cooking and more.</Muted>
+      <Text style={{ color: t.fg, fontSize: 28, fontWeight: "700", marginTop: 24, lineHeight: 38 }}>{tx("app.name")}</Text>
+      <Muted>{tx("app.tagline")}</Muted>
+      <LanguagePicker />
 
       {mode === "register" && (
         <View>
-          <Muted>I am a…</Muted>
-          <View style={{ flexDirection: "row", marginTop: 6 }}>
-            <Chip label="Household" selected={role === "seeker"} onPress={() => setRole("seeker")} />
-            <Chip label="Housekeeper" selected={role === "housekeeper"} onPress={() => setRole("housekeeper")} />
-            <Chip label="Both" selected={role === "both"} onPress={() => setRole("both")} />
+          <Muted>{tx("register.iam")}</Muted>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 6 }}>
+            <Chip label={tx("register.chip.seeker")} selected={role === "seeker"} onPress={() => setRole("seeker")} />
+            <Chip label={tx("register.chip.housekeeper")} selected={role === "housekeeper"} onPress={() => setRole("housekeeper")} />
+            <Chip label={tx("register.chip.both")} selected={role === "both"} onPress={() => setRole("both")} />
           </View>
-          <Field label="Name" value={name} onChangeText={setName} autoComplete="name" />
+          <Field label={tx("field.name")} value={name} onChangeText={setName} autoComplete="name" maxChars={100} />
         </View>
       )}
-      <Field label="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email" />
+      <Field label={tx("field.email")} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email" />
       {mode !== "forgot" && (
-        <Field label="Password (8+ characters)" value={password} onChangeText={setPassword} secureTextEntry autoComplete={mode === "login" ? "current-password" : "new-password"} />
+        <Field label={tx("field.password_new")} value={password} onChangeText={setPassword} secureTextEntry autoComplete={mode === "login" ? "current-password" : "new-password"} />
       )}
 
-      <Button title={mode === "login" ? "Sign in" : mode === "register" ? "Create account" : "Send reset link"} onPress={submit} disabled={busy} />
-      {mode === "login" && <Button kind="ghost" title="Forgot password?" onPress={() => setMode("forgot")} />}
+      <Button title={mode === "login" ? tx("auth.signin") : mode === "register" ? tx("register.submit") : tx("forgot.submit")} onPress={submit} disabled={busy} />
+      {mode === "login" && <Button kind="ghost" title={tx("login.forgot")} onPress={() => setMode("forgot")} />}
       <Button
         kind="ghost"
-        title={mode === "register" ? "Have an account? Sign in" : mode === "forgot" ? "Back to sign in" : "New here? Create an account"}
+        title={mode === "register" ? tx("register.have_account") : mode === "forgot" ? tx("forgot.back") : tx("register.new_here")}
         onPress={() => setMode(mode === "login" ? "register" : "login")}
       />
     </ScrollView>

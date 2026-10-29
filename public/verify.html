@@ -3,41 +3,55 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Confirm your email – Help Seeker</title>
+  <title data-i18n="verifypage.title">Confirm your email – Help Seeker</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header><h1>Help Seeker</h1></header>
+  <header><div class="top"><h1>Help Seeker</h1><div id="lang-slot"></div></div></header>
   <main>
-    <p id="status" class="msg" role="status">Confirming your email…</p>
+    <p id="status" class="msg" role="status" data-i18n="verifypage.confirming">Confirming your email…</p>
     <p id="next" hidden></p>
   </main>
+  <script src="i18n/core.js"></script>
+  <script src="i18n/web.js"></script>
   <script>
     const status = document.getElementById("status");
     const next = document.getElementById("next");
     const token = new URLSearchParams(location.search).get("token") || "";
     history.replaceState(null, "", "/verify.html"); // keep the one-time token out of the address bar and history
+    const t = (k, p) => I18n.t(k, p);
+    let current = null; // what is on screen, so a language switch can redraw it
 
-    function show(text, ok, nextHtml) {
-      status.textContent = text;
+    // `message` is a function so it is re-evaluated in the new language. `nextKey` is a translated sentence with a {link}
+    // placeholder; the anchor is built as a DOM node (no HTML in translations), so word order is each translation's own.
+    function show(message, ok, nextKey, linkKey) {
+      current = [message, ok, nextKey, linkKey];
+      status.removeAttribute("data-i18n");
+      status.textContent = message();
       status.className = "msg" + (ok ? "" : " err");
-      next.innerHTML = nextHtml || "";
-      next.hidden = !nextHtml;
+      next.replaceChildren();
+      next.hidden = !nextKey;
+      if (!nextKey) return;
+      const [before, after] = t(nextKey, { link: "\u0001" }).split("\u0001");
+      const a = document.createElement("a");
+      a.href = "/"; a.textContent = t(linkKey);
+      next.append(before, a, after || "");
     }
+    I18n.onChange(() => { if (current) show(...current); });
 
     (async () => {
-      if (!token) return show("This confirmation link is missing its token. Open the link from your email again.", false);
+      await I18n.init();
+      I18n.mountPicker(document.getElementById("lang-slot"));
+      if (!token) return show(() => t("verifypage.no_token"), false);
       try {
         const res = await fetch("/api/email-verification/confirm", {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
+          method: "POST", headers: { "Content-Type": "application/json", "Accept-Language": I18n.lang }, body: JSON.stringify({ token }),
         });
         const data = await res.json().catch(() => ({}));
-        if (res.ok) return show("Your email is confirmed. Thank you!", true,
-          'You can now <a href="/">go to Help Seeker</a>. If you use the mobile app, open it and tap “I\'ve confirmed”.');
-        show(data.error || "Something went wrong.", false,
-          'Sign in at <a href="/">Help Seeker</a> and ask for a new confirmation email.');
+        if (res.ok) return show(() => t("verifypage.ok"), true, "verifypage.next_ok", "verifypage.next_ok_link");
+        show(() => I18n.errorMessage(data), false, "verifypage.next_fail", "app.name");
       } catch {
-        show("Couldn't reach the server. Check your connection and reload this page.", false);
+        show(() => t("net.reach_reload"), false);
       }
     })();
   </script>

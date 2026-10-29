@@ -6,16 +6,42 @@ const dummy = require("./dummy");
 const { openDb } = require("./db");
 const { createMailer } = require("./mail");
 const crypto = require("node:crypto");
+const i18n = require("../public/i18n/core.js");
 
 const SERVICES = ["Cleaning", "Dishwashing", "Cooking", "Laundry", "Ironing", "Grocery shopping", "Child care", "Elder care"];
 const AVAIL = ["Full-time", "Part-time", "Weekends"];
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
-const MIME = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".ico": "image/x-icon" };
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+};
 
+// Every error carries a stable machine code next to its English `error` sentence. The apps translate by code; the English
+// text stays for older app builds and as the fallback. Each code has an `err.<code>` message in every language file
+// (a test enforces it), so adding a code means adding the translations too. HTTP statuses never depend on the code.
+const ERROR_CODES = [
+  "field_too_long", "name_required", "email_required", "phone_required", "city_required", "message_required",
+  "invalid_json", "unsupported_media_type", "body_too_large", "too_many_attempts", "invalid_email", "password_length",
+  "invalid_role", "email_taken", "wrong_credentials", "verify_link_invalid", "reset_link_invalid", "resend_cooldown",
+  "wrong_password", "email_not_verified", "invalid_services", "invalid_avail", "invalid_rate", "invalid_exp", "invalid_phone",
+  "request_self", "housekeeper_not_found", "request_pending", "invalid_as", "invalid_status", "request_answered",
+  "request_not_found", "invalid_rating", "review_needs_accepted", "already_reviewed", "conversation_not_found",
+  "messaging_not_open", "too_fast", "sign_in_required", "not_found", "method_not_allowed", "internal_error", "invalid_action",
+];
 class HttpError extends Error {
-  constructor(status, message, code) { super(message); this.status = status; this.code = code; }
+  constructor(status, message, code, params) {
+    super(message);
+    if (!ERROR_CODES.includes(code)) throw new Error(`HttpError needs a known error code, got ${code}`); // a programming error, caught by tests
+    this.status = status; this.code = code; this.params = params;
+  }
 }
-const bad = (m) => new HttpError(400, m);
+const bad = (m, code, params) => new HttpError(400, m, code, params);
+
+// Emails per language come from the same files as the screens (keys email.*). The language only ever *selects* a template
+// from this fixed table: nothing from the request is placed into a subject, address or body except the link and the name.
+const LOCALES = Object.fromEntries(i18n.CODES.map((c) =>
+  [c, JSON.parse(fs.readFileSync(path.join(__dirname, "..", "public", "i18n", `${c}.json`), "utf8"))]));
+const emailText = (lang, key, params) => i18n.createTranslator({ lang, messages: LOCALES[lang], fallback: LOCALES.en })(key, params);
 
 // Postgres integer columns reject NaN and values past int4, so validate ids before they reach a query.
 const toId = (v) => {
@@ -24,26 +50,28 @@ const toId = (v) => {
 };
 const likeEscape = (s) => s.replace(/[\\%_]/g, "\\$&");
 
+// Limits count what a person sees as a character (a grapheme cluster), not UTF-16 code units: "क्ष" or "ക്ഷ" is one character
+// though it is several code points, so Indic text isn't cut short sooner than English. `s.length <= max` is the cheap exact case.
 const str = (v, max, { required = false, label = "field" } = {}) => {
   const s = typeof v === "string" ? v.trim() : "";
-  if (required && !s) throw bad(`${label} is required`);
-  if (s.length > max) throw bad(`${label} is too long`);
+  if (required && !s) throw bad(`${label} is required`, `${label}_required`);
+  if (s.length > max && i18n.countGraphemes(s) > max) throw bad(`${label} is too long`, "field_too_long", { max });
   return s;
 };
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
-    if (!/^application\/json/.test(req.headers["content-type"] || "")) return reject(new HttpError(415, "Content-Type must be application/json"));
+    if (!/^application\/json/.test(req.headers["content-type"] || "")) return reject(new HttpError(415, "Content-Type must be application/json", "unsupported_media_type"));
     let size = 0;
     const chunks = [];
     req.on("data", (c) => {
       size += c.length;
-      if (size > 64 * 1024) { reject(new HttpError(413, "Body too large")); req.destroy(); return; }
+      if (size > 64 * 1024) { reject(new HttpError(413, "Body too large", "body_too_large")); req.destroy(); return; }
       chunks.push(c);
     });
     req.on("end", () => {
       try { resolve(JSON.parse(Buffer.concat(chunks).toString() || "{}")); }
-      catch { reject(bad("Invalid JSON")); }
+      catch { reject(bad("Invalid JSON", "invalid_json")); }
     });
     req.on("error", reject);
   });
@@ -57,7 +85,7 @@ function makeLimiter(max, windowMs) {
     const arr = (hits.get(key) || []).filter((t) => now - t < windowMs);
     arr.push(now);
     hits.set(key, arr);
-    if (arr.length > max) throw new HttpError(429, "Too many attempts, try again later");
+    if (arr.length > max) throw new HttpError(429, "Too many attempts, try again later", "too_many_attempts");
   };
 }
 
@@ -100,7 +128,7 @@ async function createApp({
 
   // Issues a fresh verification link (replacing any earlier one) and emails it. Mail failures are logged, not thrown,
   // so a flaky provider can't block sign-up; the user can ask for another email.
-  async function sendVerificationEmail(user) {
+  async function sendVerificationEmail(user, lang) {
     const token = crypto.randomBytes(32).toString("base64url");
     await db.query("DELETE FROM email_verifications WHERE user_id = $1 OR expires_at < now()", [user.id]);
     await db.query("INSERT INTO email_verifications (token_hash,user_id,expires_at) VALUES ($1,$2,$3)",
@@ -109,8 +137,9 @@ async function createApp({
     try {
       await sendMail({
         to: user.email,
-        subject: "Confirm your email for Help Seeker",
-        text: `Hi ${user.name},\n\nConfirm your email address to start using Help Seeker (link valid for 24 hours):\n\n${link}\n\nIf you didn't create an account, ignore this email.`,
+        subject: emailText(lang, "email.verify.subject"),
+        text: emailText(lang, "email.verify.body", { name: user.name, link }),
+        lang,
       });
     } catch (e) {
       console.error("verification email failed:", e.message);
@@ -118,29 +147,29 @@ async function createApp({
   }
 
   // ---- auth ----
-  route("POST", "/api/register", async ({ body, ip, setToken }) => {
+  route("POST", "/api/register", async ({ body, ip, setToken, lang }) => {
     limitAuth(ip);
     const email = str(body.email, 200, { required: true, label: "email" }).toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw bad("invalid email");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw bad("invalid email", "invalid_email");
     const name = str(body.name, 100, { required: true, label: "name" });
     const password = typeof body.password === "string" ? body.password : "";
-    if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters");
-    if (dummy.isDummyEmail(email)) throw bad("invalid email"); // reserved for the owner's sample data
-    if (!["seeker", "housekeeper", "both"].includes(body.role)) throw bad("role must be seeker, housekeeper or both");
+    if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters", "password_length");
+    if (dummy.isDummyEmail(email)) throw bad("invalid email", "invalid_email"); // reserved for the owner's sample data
+    if (!["seeker", "housekeeper", "both"].includes(body.role)) throw bad("role must be seeker, housekeeper or both", "invalid_role");
     // `role` only records what the person said they wanted at sign-up. It decides nothing: anyone can hire, and
     // anyone can add a housekeeper profile. "both" is stored as "housekeeper" (they set up a profile first).
     const role = body.role === "both" ? "housekeeper" : body.role;
-    if (await db.one("SELECT 1 FROM users WHERE email = $1", [email])) throw new HttpError(409, "email already registered");
+    if (await db.one("SELECT 1 FROM users WHERE email = $1", [email])) throw new HttpError(409, "email already registered", "email_taken");
     let row;
     try {
       row = await db.one("INSERT INTO users (email,name,role,pass_hash) VALUES ($1,$2,$3,$4) RETURNING id",
         [email, name, role, auth.hashPassword(password)]);
     } catch (e) {
-      if (db.isUniqueViolation(e)) throw new HttpError(409, "email already registered"); // lost a race with another signup
+      if (db.isUniqueViolation(e)) throw new HttpError(409, "email already registered", "email_taken"); // lost a race with another signup
       throw e;
     }
     setToken(await auth.createSession(db, row.id));
-    await sendVerificationEmail({ id: row.id, email, name });
+    await sendVerificationEmail({ id: row.id, email, name }, lang);
     return [201, { id: row.id, email, name, role, emailVerified: false }];
   });
 
@@ -149,7 +178,7 @@ async function createApp({
     const email = str(body.email, 200).toLowerCase();
     const row = await db.one("SELECT * FROM users WHERE email = $1", [email]);
     const ok = row && typeof body.password === "string" && auth.verifyPassword(body.password, row.pass_hash);
-    if (!ok) throw new HttpError(401, "wrong email or password");
+    if (!ok) throw new HttpError(401, "wrong email or password", "wrong_credentials");
     setToken(await auth.createSession(db, row.id));
     return { id: row.id, email: row.email, name: row.name, role: row.role, emailVerified: !!row.email_verified_at };
   });
@@ -166,24 +195,24 @@ async function createApp({
     // One atomic statement consumes the token; only an unexpired one verifies the account.
     const row = await db.one("DELETE FROM email_verifications WHERE token_hash = $1 RETURNING user_id, expires_at > now() AS valid",
       [auth.sha256(token)]);
-    if (!row || !row.valid) throw bad("this confirmation link is invalid or has expired");
+    if (!row || !row.valid) throw bad("this confirmation link is invalid or has expired", "verify_link_invalid");
     await db.query("UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1", [row.user_id]);
     return { ok: true };
   });
 
-  route("POST", "/api/email-verification/resend", async ({ user, ip }) => {
+  route("POST", "/api/email-verification/resend", async ({ user, ip, lang }) => {
     limitAuth(ip);
     if (user.emailVerified) return { ok: true, alreadyVerified: true };
     const recent = await db.one(
       "SELECT 1 FROM email_verifications WHERE user_id = $1 AND created_at > now() - make_interval(secs => $2)",
       [user.id, RESEND_COOLDOWN_SECONDS]);
-    if (recent) throw new HttpError(429, "We just sent you an email. Please wait a minute before asking for another.");
-    await sendVerificationEmail(user);
+    if (recent) throw new HttpError(429, "We just sent you an email. Please wait a minute before asking for another.", "resend_cooldown");
+    await sendVerificationEmail(user, lang);
     return { ok: true };
   }, { auth: true });
 
   // Always answers the same way so the endpoint can't be used to discover which emails have accounts.
-  route("POST", "/api/password-reset/request", async ({ body, ip }) => {
+  route("POST", "/api/password-reset/request", async ({ body, ip, lang }) => {
     limitAuth(ip);
     const email = str(body.email, 200).toLowerCase();
     const user = await db.one("SELECT id, email FROM users WHERE email = $1", [email]);
@@ -196,8 +225,9 @@ async function createApp({
       try {
         await sendMail({
           to: user.email,
-          subject: "Reset your Help Seeker password",
-          text: `Use this link within 1 hour to choose a new password:\n\n${link}\n\nIf you didn't ask for this, ignore this email.`,
+          subject: emailText(lang, "email.reset.subject"),
+          text: emailText(lang, "email.reset.body", { link }),
+          lang,
         });
       } catch (e) {
         console.error("password reset email failed:", e.message);
@@ -209,12 +239,12 @@ async function createApp({
   route("POST", "/api/password-reset/confirm", async ({ body, ip }) => {
     limitAuth(ip);
     const password = typeof body.password === "string" ? body.password : "";
-    if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters");
+    if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters", "password_length");
     const token = typeof body.token === "string" ? body.token : "";
     // Single atomic statement: only one request can ever consume a given token.
     const row = await db.one("DELETE FROM password_resets WHERE token_hash = $1 RETURNING user_id, expires_at > now() AS valid",
       [auth.sha256(token)]);
-    if (!row || !row.valid) throw bad("this reset link is invalid or has expired");
+    if (!row || !row.valid) throw bad("this reset link is invalid or has expired", "reset_link_invalid");
     // Following the emailed link proves the user controls the address, so it verifies it too.
     await db.query("UPDATE users SET pass_hash = $1, email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $2",
       [auth.hashPassword(password), row.user_id]);
@@ -227,7 +257,7 @@ async function createApp({
   route("POST", "/api/account/delete", async ({ user, body, setToken }) => {
     const row = await db.one("SELECT pass_hash FROM users WHERE id = $1", [user.id]);
     if (typeof body.password !== "string" || !auth.verifyPassword(body.password, row.pass_hash)) {
-      throw new HttpError(403, "wrong password");
+      throw new HttpError(403, "wrong password", "wrong_password");
     }
     await db.query("DELETE FROM users WHERE id = $1", [user.id]);
     setToken(null);
@@ -253,7 +283,9 @@ async function createApp({
     if (!isAdmin(user)) where.push("lower(u.email) NOT LIKE '%@dummy.test'");
     const add = (sql, v) => { params.push(v); where.push(sql.replace("?", `$${params.length}`)); };
     if (service) add("p.services @> jsonb_build_array(?::text)", service);
-    if (city) add("p.city ILIKE '%' || ? || '%'", likeEscape(city));
+    // Compared in Unicode NFC on both sides, so "é" typed as one character finds "é" stored as e + accent (and the same for Indic
+    // text keyboards compose differently, e.g. nukta forms). The stored city itself is never altered.
+    if (city) add("normalize(p.city, NFC) ILIKE '%' || ? || '%'", likeEscape(i18n.nfc(city)));
     if (Number(maxRate) > 0) add("p.rate <= ?", Math.min(Math.floor(Number(maxRate)), 2147483647));
     if (avail) add("p.avail = ?", avail);
     const order = {
@@ -278,13 +310,13 @@ async function createApp({
 
   route("PUT", "/api/profile", async ({ user, body }) => {
     const services = Array.isArray(body.services) ? [...new Set(body.services)] : [];
-    if (!services.length || services.some((s) => !SERVICES.includes(s))) throw bad("choose at least one valid service");
-    if (!AVAIL.includes(body.avail)) throw bad("invalid availability");
+    if (!services.length || services.some((s) => !SERVICES.includes(s))) throw bad("choose at least one valid service", "invalid_services");
+    if (!AVAIL.includes(body.avail)) throw bad("invalid availability", "invalid_avail");
     const rate = Number(body.rate), exp = Number(body.exp ?? 0);
-    if (!Number.isInteger(rate) || rate < 0 || rate > 100000) throw bad("invalid rate");
-    if (!Number.isInteger(exp) || exp < 0 || exp > 80) throw bad("invalid experience");
+    if (!Number.isInteger(rate) || rate < 0 || rate > 100000) throw bad("invalid rate", "invalid_rate");
+    if (!Number.isInteger(exp) || exp < 0 || exp > 80) throw bad("invalid experience", "invalid_exp");
     const phone = str(body.phone, 30, { required: true, label: "phone" });
-    if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone");
+    if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone", "invalid_phone");
     await db.query(
       `INSERT INTO profiles (user_id,city,phone,rate,exp,avail,services,bio) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
        ON CONFLICT (user_id) DO UPDATE SET city=EXCLUDED.city, phone=EXCLUDED.phone, rate=EXCLUDED.rate,
@@ -298,10 +330,10 @@ async function createApp({
   // ---- requests ----
   route("POST", "/api/requests", async ({ user, body }) => {
     const hkId = toId(body.housekeeperId);
-    if (hkId === user.id) throw bad("You can't send a request to yourself.");
-    if (!hkId || !(await db.one("SELECT 1 FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = $1 AND u.email_verified_at IS NOT NULL AND ($2 OR lower(u.email) NOT LIKE '%@dummy.test')", [hkId, isAdmin(user)]))) throw new HttpError(404, "housekeeper not found");
+    if (hkId === user.id) throw bad("You can't send a request to yourself.", "request_self");
+    if (!hkId || !(await db.one("SELECT 1 FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = $1 AND u.email_verified_at IS NOT NULL AND ($2 OR lower(u.email) NOT LIKE '%@dummy.test')", [hkId, isAdmin(user)]))) throw new HttpError(404, "housekeeper not found", "housekeeper_not_found");
     const phone = str(body.phone, 30, { required: true, label: "phone" });
-    if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone");
+    if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone", "invalid_phone");
     try {
       const row = await db.one(
         "INSERT INTO requests (seeker_id,hk_id,seeker_phone,when_text,note) VALUES ($1,$2,$3,$4,$5) RETURNING id",
@@ -309,7 +341,7 @@ async function createApp({
       );
       return [201, { id: row.id }];
     } catch (e) {
-      if (db.isUniqueViolation(e)) throw new HttpError(409, "you already have a pending request with this housekeeper");
+      if (db.isUniqueViolation(e)) throw new HttpError(409, "you already have a pending request with this housekeeper", "request_pending");
       throw e;
     }
   }, { auth: true, verified: true });
@@ -318,7 +350,7 @@ async function createApp({
   // so the apps ask for each list explicitly; without `as` the old behaviour (by sign-up role) is kept for older app builds.
   route("GET", "/api/requests", async ({ user, query }) => {
     const as = query.get("as");
-    if (as !== null && !["sent", "received"].includes(as)) throw bad("as must be sent or received");
+    if (as !== null && !["sent", "received"].includes(as)) throw bad("as must be sent or received", "invalid_as");
     const view = as || (user.role === "housekeeper" ? "received" : "sent");
     if (view === "sent") {
       return db.query(
@@ -340,7 +372,7 @@ async function createApp({
   }, { auth: true });
 
   route("PATCH", "/api/requests/:id", async ({ user, body, params }) => {
-    if (!["accepted", "declined"].includes(body.status)) throw bad("status must be accepted or declined");
+    if (!["accepted", "declined"].includes(body.status)) throw bad("status must be accepted or declined", "invalid_status");
     const id = toId(params.id);
     // Atomic: only a still-pending request can be answered, so two quick taps can't both win.
     const done = id && await db.one(
@@ -349,21 +381,21 @@ async function createApp({
     );
     if (done) return { ok: true };
     const exists = id && await db.one("SELECT 1 FROM requests WHERE id = $1 AND hk_id = $2", [id, user.id]);
-    throw exists ? new HttpError(409, "request already answered") : new HttpError(404, "request not found");
+    throw exists ? new HttpError(409, "request already answered", "request_answered") : new HttpError(404, "request not found", "request_not_found");
   }, { auth: true, verified: true });
 
   route("POST", "/api/requests/:id/review", async ({ user, body, params }) => {
     const id = toId(params.id);
     const r = id && await db.one("SELECT status, hk_id FROM requests WHERE id = $1 AND seeker_id = $2", [id, user.id]);
-    if (!r) throw new HttpError(404, "request not found");
-    if (r.status !== "accepted") throw new HttpError(409, "you can only review accepted requests");
+    if (!r) throw new HttpError(404, "request not found", "request_not_found");
+    if (r.status !== "accepted") throw new HttpError(409, "you can only review accepted requests", "review_needs_accepted");
     const rating = Number(body.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw bad("rating must be 1–5");
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw bad("rating must be 1–5", "invalid_rating");
     try {
       await db.query("INSERT INTO reviews (request_id,hk_id,rating,comment) VALUES ($1,$2,$3,$4)",
         [id, r.hk_id, rating, str(body.comment, 1000)]);
     } catch (e) {
-      if (db.isUniqueViolation(e)) throw new HttpError(409, "already reviewed");
+      if (db.isUniqueViolation(e)) throw new HttpError(409, "already reviewed", "already_reviewed");
       throw e;
     }
     return [201, { ok: true }];
@@ -378,8 +410,8 @@ async function createApp({
       `SELECT r.id, r.status, CASE WHEN r.seeker_id = $2 THEN hk.name ELSE s.name END AS other_name
        FROM requests r JOIN users s ON s.id = r.seeker_id JOIN users hk ON hk.id = r.hk_id
        WHERE r.id = $1 AND (r.seeker_id = $2 OR r.hk_id = $2)`, [id, user.id]);
-    if (!r) throw new HttpError(404, "conversation not found");
-    if (r.status !== "accepted") throw new HttpError(409, "Messaging opens once the housekeeper accepts the request.");
+    if (!r) throw new HttpError(404, "conversation not found", "conversation_not_found");
+    if (r.status !== "accepted") throw new HttpError(409, "Messaging opens once the housekeeper accepts the request.", "messaging_not_open");
     return r;
   }
 
@@ -403,15 +435,15 @@ async function createApp({
     const c = await loadConversation(user, params.id);
     const text = str(body.body, 1000, { required: true, label: "message" });
     const recent = await db.one("SELECT COUNT(*)::int AS n FROM messages WHERE sender_id = $1 AND created_at > now() - interval '1 minute'", [user.id]);
-    if (recent.n >= MESSAGES_PER_MINUTE) throw new HttpError(429, "You're sending messages too fast. Please wait a moment.");
+    if (recent.n >= MESSAGES_PER_MINUTE) throw new HttpError(429, "You're sending messages too fast. Please wait a moment.", "too_fast");
     const row = await db.one("INSERT INTO messages (request_id, sender_id, body) VALUES ($1,$2,$3) RETURNING id, created_at", [c.id, user.id, text]);
     return [201, { id: row.id, mine: true, body: text, created_at: row.created_at }];
   }, { auth: true, verified: true });
 
   // ---- owner-only sample data: add or remove with one click. Anyone else gets a plain 404, as if the route didn't exist. ----
   route("POST", "/api/admin/sample-data", async ({ user, body }) => {
-    if (!isAdmin(user)) throw new HttpError(404, "not found");
-    if (!["add", "remove"].includes(body.action)) throw bad("action must be add or remove");
+    if (!isAdmin(user)) throw new HttpError(404, "not found", "not_found");
+    if (!["add", "remove"].includes(body.action)) throw bad("action must be add or remove", "invalid_action");
     // Nobody knows the sample accounts' password, so nobody can sign in as one of them.
     const done = body.action === "add" ? await dummy.addDummy(db, { password: crypto.randomBytes(32).toString("hex") }) : await dummy.removeDummy(db);
     return { ok: true, ...done, sampleHousekeepers: await dummy.countDummy(db) };
@@ -443,14 +475,17 @@ async function createApp({
       pathMatch = true;
       if (r.method === req.method) { matched = r; params = m.groups || {}; break; }
     }
-    if (!matched) throw new HttpError(pathMatch ? 405 : 404, pathMatch ? "method not allowed" : "not found");
-    if (matched.needAuth && !user) throw new HttpError(401, "sign in required");
+    if (!matched) throw new HttpError(pathMatch ? 405 : 404, pathMatch ? "method not allowed" : "not found", pathMatch ? "method_not_allowed" : "not_found");
+    if (matched.needAuth && !user) throw new HttpError(401, "sign in required", "sign_in_required");
     if (matched.verified && !user.emailVerified) {
       throw new HttpError(403, "Please verify your email address first. We sent you a link when you signed up.", "email_not_verified");
     }
 
     const body = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) ? await readJson(req) : {};
-    const out = await matched.handler({ user, body, params, query: url.searchParams, token, setToken, ip: clientIp(req) });
+    // The language the client says it is showing (Accept-Language, which the apps set to their chosen language). Anything not
+    // on the allow-list becomes English; the value is never stored, logged or placed in SQL, only used to pick a template.
+    const lang = i18n.negotiate(req.headers["accept-language"]);
+    const out = await matched.handler({ user, body, params, query: url.searchParams, token, setToken, ip: clientIp(req), lang });
     let [status, payload] = Array.isArray(out) && typeof out[0] === "number" ? out : [200, out];
     // Native apps can't rely on cookies: hand them the session token in the body. Browsers never get it
     // in JS-readable form (a cross-site page can't set X-Client without a CORS preflight, which we don't allow).
@@ -462,10 +497,10 @@ async function createApp({
   }
 
   function serveStatic(req, res, url) {
-    if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "method not allowed");
+    if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "method not allowed", "method_not_allowed");
     const rel = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
     const file = path.normalize(path.join(PUBLIC_DIR, rel));
-    if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) throw new HttpError(404, "not found");
+    if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) throw new HttpError(404, "not found", "not_found");
     res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "X-Content-Type-Options": "nosniff" });
     fs.createReadStream(file).pipe(res);
   }
@@ -479,11 +514,13 @@ async function createApp({
       const status = e.status || 500;
       if (status === 500) console.error(e);
       if (!res.headersSent) res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: status === 500 ? "internal error" : e.message, ...(e.code && status !== 500 ? { code: e.code } : {}) }));
+      res.end(JSON.stringify(status === 500
+        ? { error: "internal error", code: "internal_error" }
+        : { error: e.message, ...(e.code ? { code: e.code } : {}), ...(e.params ? { params: e.params } : {}) }));
     }
   });
   server.on("close", () => { db.close().catch((e) => console.error("db close failed:", e.message)); });
   return { server, db };
 }
 
-module.exports = { createApp, SERVICES, AVAIL };
+module.exports = { createApp, SERVICES, AVAIL, ERROR_CODES };

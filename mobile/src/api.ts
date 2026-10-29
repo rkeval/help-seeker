@@ -1,5 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 import { API_URL } from "./config";
+import { errorMessage, tr } from "./i18n";
 import type { ChatMessage, Housekeeper, HousekeeperRequest, Meta, Profile, SeekerRequest, User } from "./types";
 
 const TOKEN_KEY = "session-token";
@@ -26,6 +27,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       signal: controller.signal,
       headers: {
         "X-Client": "mobile",
+        "Accept-Language": tr.lang, // the language shown in the app: errors and emails come back in it
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
@@ -33,20 +35,20 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     });
   } catch (e) {
     if ((e as Error).name === "AbortError") {
-      throw new Error("The server is taking too long to respond. It may be waking up. Please try again in a moment.");
+      throw new Error(tr("net.timeout"));
     }
-    throw new Error("Can't reach the server. Check your connection.");
+    throw new Error(tr("net.offline"));
   } finally {
     clearTimeout(timer);
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const message = (data as { error?: string }).error;
+    const body = data as { error?: string; code?: string; params?: Record<string, number> };
     // 502/503/504 with no message from our app = the host is starting the server up (or restarting it after an update)
-    if (!message && res.status >= 502 && res.status <= 504) {
-      throw new Error("The server is starting up. Please try again in a moment.");
+    if (!body.error && res.status >= 502 && res.status <= 504) {
+      throw new Error(tr("net.starting"));
     }
-    throw new Error(message || `Request failed (${res.status})`);
+    throw new Error(body.error || body.code ? errorMessage(body) : tr("net.failed", { status: res.status }));
   }
   return data as T;
 }
