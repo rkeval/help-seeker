@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # superseded pull-request runs are cancelled; runs on main are never cancelled half-way through a deploy
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   api:
@@ -57,3 +58,74 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npx expo export --platform android --platform ios --output-dir "$RUNNER_TEMP/export"
+
+  e2e:
+    name: Browser end-to-end (website)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: hs
+          POSTGRES_PASSWORD: hs
+          POSTGRES_DB: hs_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hs -d hs_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      E2E_ADMIN_URL: postgres://hs:hs@localhost:5432/hs_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Playwright is deliberately not a project dependency (keeps installs fast); CI adds it just for this job
+      - run: npm i --no-save playwright@1.63.0
+      - run: npx playwright install --with-deps chromium
+      - name: Run the website regression (production mode, real browser)
+        run: e2e/run.sh web
+
+  deploy:
+    name: Deploy to production
+    # Only after every check above is green, and only for a push to main (never for pull requests)
+    needs: [api, mobile, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      APP_URL: ${{ vars.APP_URL }}
+      DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # lets the wait step tell whether a newer commit includes this one
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check that deployment is configured
+        id: cfg
+        run: |
+          if [ -z "$DEPLOY_HOOK" ] || [ -z "$APP_URL" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::Nothing was deployed. Add the RENDER_DEPLOY_HOOK_URL secret and the APP_URL variable to turn on automatic deployment (README: Continuous deployment)."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Trigger the Render deploy
+        if: steps.cfg.outputs.configured == 'true'
+        run: curl --fail --silent --show-error --max-time 60 -X POST "$DEPLOY_HOOK" > /dev/null
+      - name: Wait until this commit is live
+        if: steps.cfg.outputs.configured == 'true'
+        run: node scripts/wait-for-deploy.js "$APP_URL" "${{ github.sha }}" 1200
+      - name: Smoke-test production (read-only)
+        if: steps.cfg.outputs.configured == 'true'
+        run: node scripts/smoke.js "$APP_URL"

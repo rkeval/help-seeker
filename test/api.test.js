@@ -352,7 +352,7 @@ test("timestamps are ISO strings and /healthz checks the database", async (t) =>
   assert.ok(Math.abs(Date.parse(at) - Date.now()) < 60_000);
   const h = await anon("GET", "/healthz");
   assert.equal(h.status, 200);
-  assert.deepEqual(h.body, { ok: true });
+  assert.deepEqual(h.body, { ok: true, commit: null }); // `commit` is filled in by the host (RENDER_GIT_COMMIT) so deploys can be verified
 });
 
 test("rate limiting is per client IP and honours X-Forwarded-For only when the proxy is trusted", async (t) => {

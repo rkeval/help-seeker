@@ -67,13 +67,14 @@ const MESSAGES_PER_MINUTE = 20;
 
 async function createApp({
   databaseUrl = process.env.DATABASE_URL,
+  migrationUrl = process.env.DATABASE_URL_UNPOOLED,
   schema,
   secureCookies = false,
   appUrl = "http://localhost:3000",
   trustProxy = false,
   sendMail = createMailer(),
 } = {}) {
-  const db = await openDb(databaseUrl, { schema });
+  const db = await openDb(databaseUrl, { schema, migrationUrl });
   const limitAuth = makeLimiter(20, 15 * 60 * 1000);
 
   // Behind a hosting proxy every connection comes from the proxy, so use the address it appended to X-Forwarded-For.
@@ -388,9 +389,11 @@ async function createApp({
 
   route("GET", "/api/meta", async () => ({ services: SERVICES, availability: AVAIL }));
 
+  // `commit` lets the deploy pipeline check that the new version is the one actually serving traffic
+  // (Render sets RENDER_GIT_COMMIT for every deploy; set GIT_COMMIT yourself on other hosts).
   route("GET", "/healthz", async () => {
     await db.one("SELECT 1");
-    return { ok: true };
+    return { ok: true, commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || null };
   });
 
   // ---- dispatch ----

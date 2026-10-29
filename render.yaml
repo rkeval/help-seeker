@@ -8,12 +8,17 @@ services:
     buildCommand: npm install --omit=dev
     startCommand: npm start
     healthCheckPath: /healthz
+    # Deploys are triggered by the GitHub Actions pipeline (.github/workflows/ci.yml) after all checks pass,
+    # so Render must not also deploy on every push.
+    autoDeployTrigger: "off"
     envVars:
       - key: NODE_ENV
         value: production
       - key: TRUST_PROXY
         value: "1"
       - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
         sync: false
       - key: APP_URL
         sync: false

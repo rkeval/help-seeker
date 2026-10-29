@@ -80,9 +80,12 @@ const UNIQUE_VIOLATION = "23505";
 
 /**
  * Opens a connection pool and creates the tables if needed.
- * `schema` (used by tests) isolates everything in its own Postgres schema, dropped again on close().
+ * - `connectionString`: used for all app traffic. On Neon this is the *pooled* URL (host contains "-pooler").
+ * - `migrationUrl` (optional): used only for the schema step at startup. Neon recommends a *direct* (non-pooled)
+ *   connection for schema changes; leave it unset and the app URL is used.
+ * - `schema` (used by tests): isolates everything in its own Postgres schema, dropped again on close().
  */
-async function openDb(connectionString, { schema } = {}) {
+async function openDb(connectionString, { schema, migrationUrl } = {}) {
   if (!connectionString) throw new Error("DATABASE_URL is not set");
   if (schema) {
     const boot = new Pool({ connectionString, max: 1 });
@@ -106,7 +109,13 @@ async function openDb(connectionString, { schema } = {}) {
       await pool.end();
     },
   };
-  await pool.query(SCHEMA_SQL);
+
+  if (migrationUrl && migrationUrl !== connectionString && !schema) {
+    const direct = new Pool({ connectionString: migrationUrl, max: 1 });
+    try { await direct.query(SCHEMA_SQL); } finally { await direct.end(); }
+  } else {
+    await pool.query(SCHEMA_SQL);
+  }
   return db;
 }
 
