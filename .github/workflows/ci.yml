@@ -58,6 +58,13 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npx expo export --platform android --platform ios --output-dir "$RUNNER_TEMP/export"
+      # A release-style build (no overrides) must point at the live site, not a local address
+      - name: The bundles point at the live site
+        run: |
+          for bundle in $(find "$RUNNER_TEMP/export" -name '*.hbc'); do
+            grep -aq "https://help-seeker.onrender.com" "$bundle" || { echo "::error::$bundle does not point at the live site"; exit 1; }
+            if grep -aq "localhost:3000\|10.0.2.2:3000" "$bundle"; then echo "::error::$bundle still contains a local address"; exit 1; fi
+          done
 
   e2e:
     name: Browser end-to-end (website)

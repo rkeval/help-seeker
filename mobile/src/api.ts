@@ -12,11 +12,18 @@ const saveToken = async (t: string | null) => {
   else await SecureStore.deleteItemAsync(TOKEN_KEY);
 };
 
+// The free hosting plan puts the server to sleep when nobody has used it for a while, and the first request afterwards
+// can take about a minute. Wait long enough for that, but never forever.
+const REQUEST_TIMEOUT_MS = 90_000;
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(API_URL + path, {
       method,
+      signal: controller.signal,
       headers: {
         "X-Client": "mobile",
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -24,11 +31,23 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-  } catch {
+  } catch (e) {
+    if ((e as Error).name === "AbortError") {
+      throw new Error("The server is taking too long to respond. It may be waking up. Please try again in a moment.");
+    }
     throw new Error("Can't reach the server. Check your connection.");
+  } finally {
+    clearTimeout(timer);
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const message = (data as { error?: string }).error;
+    // 502/503/504 with no message from our app = the host is starting the server up (or restarting it after an update)
+    if (!message && res.status >= 502 && res.status <= 504) {
+      throw new Error("The server is starting up. Please try again in a moment.");
+    }
+    throw new Error(message || `Request failed (${res.status})`);
+  }
   return data as T;
 }
 

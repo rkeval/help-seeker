@@ -6,7 +6,7 @@ The owner decides *what the product does*; engineering decisions are made by the
 ## Layout
 - `server/`: plain Node `http` server, no framework. `app.js` (routes), `auth.js`, `db.js` (schema, created on startup with `IF NOT EXISTS`), `mail.js`, `seed.js`.
 - `public/`: the website (plain HTML/CSS/JS, no build step). `verify.html` and `reset.html` are the emailed-link pages.
-- `mobile/`: Expo / React Native app (TypeScript) using the same API. Token auth (`Authorization: Bearer`, only issued when the request sends `X-Client: mobile`).
+- `mobile/`: Expo / React Native app (TypeScript) using the same API. Token auth (`Authorization: Bearer`, only issued when the request sends `X-Client: mobile`). It talks to the live site by default (`mobile/src/config.ts`, `LIVE_API_URL`); `EXPO_PUBLIC_API_URL` overrides it (the e2e runner and local development use that). Requests time out after 90 s and the first screen explains the free-tier cold start.
 - `test/api.test.js`: API tests against real Postgres; each test gets its own schema.
 - `e2e/`: browser end-to-end regression (`e2e/run.sh`).
 - `.github/workflows/ci.yml`: runs the API tests (Postgres service) and the mobile typecheck + bundle.
