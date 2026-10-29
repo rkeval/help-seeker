@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Confirm your email – Help Seeker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><h1>Help Seeker</h1></header>
+  <main>
+    <p id="status" class="msg" role="status">Confirming your email…</p>
+    <p id="next" hidden></p>
+  </main>
+  <script>
+    const status = document.getElementById("status");
+    const next = document.getElementById("next");
+    const token = new URLSearchParams(location.search).get("token") || "";
+    history.replaceState(null, "", "/verify.html"); // keep the one-time token out of the address bar and history
+
+    function show(text, ok, nextHtml) {
+      status.textContent = text;
+      status.className = "msg" + (ok ? "" : " err");
+      next.innerHTML = nextHtml || "";
+      next.hidden = !nextHtml;
+    }
+
+    (async () => {
+      if (!token) return show("This confirmation link is missing its token. Open the link from your email again.", false);
+      try {
+        const res = await fetch("/api/email-verification/confirm", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) return show("Your email is confirmed. Thank you!", true,
+          'You can now <a href="/">go to Help Seeker</a>. If you use the mobile app, open it and tap “I\'ve confirmed”.');
+        show(data.error || "Something went wrong.", false,
+          'Sign in at <a href="/">Help Seeker</a> and ask for a new confirmation email.');
+      } catch {
+        show("Couldn't reach the server. Check your connection and reload this page.", false);
+      }
+    })();
+  </script>
+</body>
+</html>

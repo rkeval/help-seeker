@@ -1,5 +1,5 @@
 export type Role = "seeker" | "housekeeper";
-export interface User { id: number; email: string; name: string; role: Role }
+export interface User { id: number; email: string; name: string; role: Role; emailVerified: boolean }
 export interface Profile {
   city: string; phone: string; rate: number; exp: number; avail: string; services: string[]; bio: string;
 }

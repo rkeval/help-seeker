@@ -48,6 +48,7 @@ export const api = {
   async logout() {
     try { await call("POST", "/api/logout", {}); } finally { await saveToken(null); }
   },
+  resendVerification: () => call<{ ok: boolean; alreadyVerified?: boolean }>("POST", "/api/email-verification/resend", {}),
   requestPasswordReset: (email: string) => call<{ message: string }>("POST", "/api/password-reset/request", { email }),
   async deleteAccount(password: string) {
     await call("POST", "/api/account/delete", { password });
