@@ -1,0 +1,29 @@
+:root { --bg:#f6f7f9; --fg:#1d2330; --muted:#667085; --card:#fff; --accent:#2f6fed; --line:#e3e6eb; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#12151b; --fg:#e8ebf0; --muted:#9aa3b2; --card:#1b2029; --accent:#6c9bff; --line:#2a303c; }
+}
+* { box-sizing: border-box; }
+body { margin:0; font:16px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+header, main { max-width: 960px; margin: 0 auto; padding: 16px; }
+h1 { margin: 8px 0 0; }
+header p { margin: 0 0 12px; color: var(--muted); }
+nav { display:flex; gap:8px; flex-wrap:wrap; }
+button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:8px 14px; font:inherit; cursor:pointer; }
+button.ghost, nav button { background:transparent; color:var(--fg); border:1px solid var(--line); }
+nav button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+#filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+label { display:flex; flex-direction:column; gap:4px; font-size:14px; color:var(--muted); }
+input, select, textarea { font:inherit; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+.stack { display:flex; flex-direction:column; gap:12px; }
+.row { display:flex; gap:8px; justify-content:flex-end; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:12px; }
+.muted { color:var(--muted); }
+.tag { display:inline-block; font-size:12px; padding:2px 8px; margin:2px 4px 2px 0; border-radius:999px; background:var(--bg); border:1px solid var(--line); }
+.hk h3 { margin:0; }
+.hk .meta { color:var(--muted); font-size:14px; margin:4px 0 8px; }
+.hk .rate { font-weight:600; }
+fieldset { border:1px solid var(--line); border-radius:8px; }
+fieldset label { flex-direction:row; align-items:center; display:inline-flex; margin-right:12px; color:var(--fg); }
+dialog { border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--fg); width:min(420px, 92vw); }
+dialog::backdrop { background:rgba(0,0,0,.5); }
