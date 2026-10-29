@@ -1,9 +1,16 @@
-const test = require("node:test");
+const nodeTest = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const { createApp } = require("../server/app");
 
+// Tests need a real Postgres, e.g. TEST_DATABASE_URL=postgres://user:pass@localhost:5432/hs_test
+// Each test gets its own throwaway schema inside it, so tests don't interfere with each other.
+const TEST_URL = process.env.TEST_DATABASE_URL;
+const test = (name, fn) => nodeTest(name, { skip: !TEST_URL && "set TEST_DATABASE_URL to run" }, fn);
+
 async function start(opts = {}) {
-  const { server, db } = createApp({ dbFile: ":memory:", sendMail: async () => {}, ...opts });
+  const schema = "t_" + crypto.randomBytes(6).toString("hex");
+  const { server, db } = await createApp({ databaseUrl: TEST_URL, schema, sendMail: async () => {}, ...opts });
   await new Promise((r) => server.listen(0, r));
   const base = `http://localhost:${server.address().port}`;
   // tiny client that keeps a cookie jar per "browser"
@@ -176,7 +183,7 @@ test("password reset: emailed single-use link, revokes sessions, no account enum
   // expired token
   await anon("POST", "/api/password-reset/request", { email: "r@x.com" });
   const t2 = /token=([\w-]+)/.exec(mails[1].text)[1];
-  db.prepare("UPDATE password_resets SET expires_at = ?").run(Date.now() - 1000);
+  await db.query("UPDATE password_resets SET expires_at = now() - interval '1 second'");
   assert.equal((await anon("POST", "/api/password-reset/confirm", { token: t2, password: "new-password-2" })).status, 400);
 
   // a new request replaces the earlier link
@@ -221,12 +228,133 @@ test("account deletion removes the user and everything attached to them", async 
   assert.equal((await hk("GET", "/api/me")).body.user, null);
   assert.equal((await anon("GET", "/api/housekeepers")).body.length, 0);
   assert.equal((await hk("POST", "/api/login", { email: "h@x.com", password: "password123" })).status, 401);
-  for (const table of ["profiles", "requests", "reviews", "sessions"]) {
-    const where = table === "sessions" ? "user_id" : table === "profiles" ? "user_id" : null;
-    if (where) assert.equal(db.prepare(`SELECT COUNT(*) n FROM ${table} WHERE ${where} = ?`).get(hkId).n, 0, table);
-  }
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM requests").get().n, 0);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM reviews").get().n, 0);
+  const count = async (table, where = "true", ...args) => (await db.one(`SELECT COUNT(*)::int n FROM ${table} WHERE ${where}`, args)).n;
+  assert.equal(await count("profiles", "user_id = $1", hkId), 0);
+  assert.equal(await count("sessions", "user_id = $1", hkId), 0);
+  assert.equal(await count("requests"), 0);
+  assert.equal(await count("reviews"), 0);
   assert.deepEqual((await s("GET", "/api/requests")).body, []); // the household survives, request is gone
   assert.equal((await s("GET", "/api/me")).body.user.email, "s@x.com");
+});
+
+test("malformed ids return 4xx instead of crashing the database driver", async (t) => {
+  const { server, client } = await start();
+  t.after(() => server.close());
+  const hk = client(), s = client();
+  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  for (const bad of ["abc", "NaN", -1, 0, 1.5, 99999999999, null, "1; DROP TABLE users"]) {
+    assert.equal((await s("POST", "/api/requests", { housekeeperId: bad, phone: "1234567" })).status, 404, String(bad));
+  }
+  for (const bad of ["abc", "0", "99999999999", "1e9999"]) {
+    assert.equal((await hk("PATCH", `/api/requests/${bad}`, { status: "accepted" })).status, 404, bad);
+    assert.equal((await s("POST", `/api/requests/${bad}/review`, { rating: 5 })).status, 404, bad);
+  }
+  assert.equal((await s("GET", "/api/housekeepers?maxRate=99999999999999999999")).status, 200);
+});
+
+test("concurrent duplicate requests and double-answers are resolved by the database", async (t) => {
+  const { server, client } = await start();
+  t.after(() => server.close());
+  const hk = client(), s = client(), anon = client();
+  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await hk("PUT", "/api/profile", profile);
+  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
+
+  const sent = await Promise.all([1, 2, 3, 4].map(() => s("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" })));
+  assert.deepEqual(sent.map((r) => r.status).sort(), [201, 409, 409, 409]);
+
+  const id = (await hk("GET", "/api/requests")).body[0].id;
+  const answers = await Promise.all(["accepted", "declined", "accepted"].map((status) => hk("PATCH", `/api/requests/${id}`, { status })));
+  assert.deepEqual(answers.map((r) => r.status).sort(), [200, 409, 409]);
+
+  const reviews = await Promise.all([5, 1, 3].map((rating) => s("POST", `/api/requests/${id}/review`, { rating })));
+  if ((await s("GET", "/api/requests")).body[0].status === "accepted") {
+    assert.deepEqual(reviews.map((r) => r.status).sort(), [201, 409, 409]);
+  }
+});
+
+test("a reset token can only be consumed once even under concurrency", async (t) => {
+  const mails = [];
+  const { server, client } = await start({ sendMail: async (m) => mails.push(m) });
+  t.after(() => server.close());
+  const a = client();
+  await a("POST", "/api/register", { email: "c@x.com", name: "C", password: "password123", role: "seeker" });
+  await a("POST", "/api/password-reset/request", { email: "c@x.com" });
+  const token = /token=([\w-]+)/.exec(mails[0].text)[1];
+  const results = await Promise.all(["pw-number-one", "pw-number-two", "pw-number-three"]
+    .map((password) => client()("POST", "/api/password-reset/confirm", { token, password })));
+  assert.deepEqual(results.map((r) => r.status).sort(), [200, 400, 400]);
+});
+
+test("search: ordering, filters and LIKE wildcards are handled literally", async (t) => {
+  const { server, client } = await start();
+  t.after(() => server.close());
+  const anon = client(), s = client();
+  const mk = async (email, name, over) => {
+    const c = client();
+    await c("POST", "/api/register", { email, name, password: "password123", role: "housekeeper" });
+    await c("PUT", "/api/profile", { ...profile, ...over });
+    return c;
+  };
+  const hkA = await mk("a@x.com", "Alice", { city: "Pune", rate: 300, exp: 1, services: ["Cooking"] });
+  await mk("b@x.com", "Bob", { city: "100% Fun_City", rate: 100, exp: 9, services: ["Cleaning"], avail: "Weekends" });
+  await mk("c@x.com", "Cara", { city: "Delhi", rate: 200, exp: 5, services: ["Cleaning", "Cooking"] });
+
+  const names = async (q) => (await anon("GET", "/api/housekeepers" + q)).body.map((h) => h.name);
+  assert.deepEqual(await names("?sort=rate"), ["Bob", "Cara", "Alice"]);
+  assert.deepEqual(await names("?sort=exp"), ["Bob", "Cara", "Alice"]);
+  assert.deepEqual(await names("?service=Cleaning&sort=rate"), ["Bob", "Cara"]);
+  assert.deepEqual(await names("?maxRate=200&sort=rate"), ["Bob", "Cara"]);
+  assert.deepEqual(await names("?avail=Weekends"), ["Bob"]);
+  assert.deepEqual(await names("?city=DEL"), ["Cara"]); // case-insensitive substring
+  assert.deepEqual(await names("?city=" + encodeURIComponent("%")), ["Bob"]); // % is literal, not "match everything"
+  assert.deepEqual(await names("?city=" + encodeURIComponent("_")), ["Bob"]);
+  assert.deepEqual(await names("?service=" + encodeURIComponent("Cooking' OR '1'='1")), []);
+
+  // unrated housekeepers sort after rated ones
+  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  const alice = (await anon("GET", "/api/housekeepers?city=Pune")).body[0];
+  await s("POST", "/api/requests", { housekeeperId: alice.id, phone: "1234567" });
+  const rid = (await hkA("GET", "/api/requests")).body[0].id;
+  await hkA("PATCH", `/api/requests/${rid}`, { status: "accepted" });
+  await s("POST", `/api/requests/${rid}/review`, { rating: 4 });
+  const top = (await anon("GET", "/api/housekeepers?sort=rating")).body;
+  assert.equal(top[0].name, "Alice");
+  assert.equal(top[0].rating, 4);
+  assert.equal(top[1].rating, null);
+});
+
+test("timestamps are ISO strings and /healthz checks the database", async (t) => {
+  const { server, client } = await start();
+  t.after(() => server.close());
+  const hk = client(), s = client(), anon = client();
+  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await hk("PUT", "/api/profile", profile);
+  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
+  await s("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" });
+  const at = (await s("GET", "/api/requests")).body[0].created_at;
+  assert.match(at, /^\d{4}-\d\d-\d\dT[\d:.]+Z$/);
+  assert.ok(Math.abs(Date.parse(at) - Date.now()) < 60_000);
+  const h = await anon("GET", "/healthz");
+  assert.equal(h.status, 200);
+  assert.deepEqual(h.body, { ok: true });
+});
+
+test("rate limiting is per client IP and honours X-Forwarded-For only when the proxy is trusted", async (t) => {
+  const run = async (trustProxy) => {
+    const { server } = await start({ trustProxy });
+    t.after(() => server.close());
+    const base = `http://localhost:${server.address().port}`;
+    const hit = (ip) => fetch(base + "/api/login", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Forwarded-For": ip },
+      body: JSON.stringify({ email: "x@x.com", password: "wrong-password" }),
+    }).then((r) => r.status);
+    for (let i = 0; i < 20; i++) await hit("1.1.1.1");
+    return { first: await hit("1.1.1.1"), other: await hit("2.2.2.2") };
+  };
+  assert.deepEqual(await run(true), { first: 429, other: 401 });   // behind a proxy: users are limited separately
+  assert.deepEqual(await run(false), { first: 429, other: 429 });  // not trusted: header is ignored, can't be used to dodge the limit
 });

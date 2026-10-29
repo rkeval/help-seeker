@@ -156,7 +156,7 @@ async function loadRequests() {
     <div class="card">
       <strong>${esc(isHk ? r.seeker_name : r.hk_name)}</strong>
       <span class="badge ${r.status}">${r.status}</span>
-      <div class="muted">${new Date(r.created_at + "Z").toLocaleString()} · ${esc(r.when || "flexible")}</div>
+      <div class="muted">${new Date(r.created_at).toLocaleString()} · ${esc(r.when || "flexible")}</div>
       <div>${esc(r.note)}</div>
       ${isHk ? `<div>Phone: <a href="tel:${esc(r.seeker_phone)}">${esc(r.seeker_phone)}</a></div>` : ""}
       ${!isHk && r.hk_phone ? `<div>Phone: <a href="tel:${esc(r.hk_phone)}">${esc(r.hk_phone)}</a></div>` : ""}

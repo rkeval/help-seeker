@@ -47,7 +47,7 @@ export default function RequestsScreen({ user }: { user: User }) {
               <Text style={{ color: t.fg, fontSize: 17, fontWeight: "600" }}>{hkRow ? hkRow.seeker_name : seekerRow?.hk_name}</Text>
               <Text style={{ color, fontWeight: "600" }}>{r.status}</Text>
             </View>
-            <Muted>{new Date(r.created_at.replace(" ", "T") + "Z").toLocaleString()} · {r.when || "flexible"}</Muted>
+            <Muted>{new Date(r.created_at).toLocaleString()} · {r.when || "flexible"}</Muted>
             {!!r.note && <Text style={{ color: t.fg }}>{r.note}</Text>}
             {!!phone && <Button kind="ghost" title={`Call ${phone}`} onPress={() => call(phone)} />}
 

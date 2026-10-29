@@ -16,33 +16,29 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(key, Buffer.from(keyHex, "hex"));
 }
 
-function createSession(db, userId) {
+async function createSession(db, userId) {
   const token = crypto.randomBytes(32).toString("base64url");
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?,?,?)")
-    .run(sha256(token), userId, Date.now() + SESSION_MS);
+  await db.query("DELETE FROM sessions WHERE expires_at < now()"); // housekeeping so the table doesn't grow forever
+  await db.query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1,$2,$3)",
+    [sha256(token), userId, new Date(Date.now() + SESSION_MS)]);
   return token;
 }
 
-function userFromToken(db, token) {
+async function userFromToken(db, token) {
   if (!token) return null;
-  const row = db.prepare(
-    `SELECT u.id, u.email, u.name, u.role, s.expires_at FROM sessions s
-     JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`
-  ).get(sha256(token));
-  if (!row) return null;
-  if (row.expires_at < Date.now()) {
-    destroySession(db, token);
-    return null;
-  }
-  return { id: row.id, email: row.email, name: row.name, role: row.role };
+  return db.one(
+    `SELECT u.id, u.email, u.name, u.role FROM sessions s
+     JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now()`,
+    [sha256(token)]
+  );
 }
 
-function destroySession(db, token) {
-  if (token) db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
+async function destroySession(db, token) {
+  if (token) await db.query("DELETE FROM sessions WHERE token_hash = $1", [sha256(token)]);
 }
 
-function destroyAllSessions(db, userId) {
-  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+async function destroyAllSessions(db, userId) {
+  await db.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
 }
 
 function parseCookies(header = "") {
@@ -60,4 +56,4 @@ function sessionCookie(token, secure) {
   return `sid=${token || ""}; ${attrs.join("; ")}`;
 }
 
-module.exports = { sha256, destroyAllSessions, hashPassword, verifyPassword, createSession, userFromToken, destroySession, parseCookies, sessionCookie };
+module.exports = { sha256, hashPassword, verifyPassword, createSession, userFromToken, destroySession, destroyAllSessions, parseCookies, sessionCookie };

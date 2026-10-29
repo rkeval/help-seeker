@@ -1,0 +1,21 @@
+# Render Blueprint: free web service. Pair it with a free hosted Postgres (e.g. Neon) and paste its
+# connection string into DATABASE_URL in the Render dashboard.
+services:
+  - type: web
+    name: help-seeker
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false

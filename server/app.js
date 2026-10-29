@@ -16,6 +16,13 @@ class HttpError extends Error {
 }
 const bad = (m) => new HttpError(400, m);
 
+// Postgres integer columns reject NaN and values past int4, so validate ids before they reach a query.
+const toId = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 && n <= 2147483647 ? n : null;
+};
+const likeEscape = (s) => s.replace(/[\\%_]/g, "\\$&");
+
 const str = (v, max, { required = false, label = "field" } = {}) => {
   const s = typeof v === "string" ? v.trim() : "";
   if (required && !s) throw bad(`${label} is required`);
@@ -55,20 +62,25 @@ function makeLimiter(max, windowMs) {
 
 const RESET_TTL_MS = 60 * 60 * 1000;
 
-function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secureCookies = false, appUrl = "http://localhost:3000", sendMail = createMailer() } = {}) {
-  const db = openDb(dbFile);
+async function createApp({
+  databaseUrl = process.env.DATABASE_URL,
+  schema,
+  secureCookies = false,
+  appUrl = "http://localhost:3000",
+  trustProxy = false,
+  sendMail = createMailer(),
+} = {}) {
+  const db = await openDb(databaseUrl, { schema });
   const limitAuth = makeLimiter(20, 15 * 60 * 1000);
 
-  const housekeeperRow = (r) => ({
-    id: r.user_id, name: r.name, city: r.city, rate: r.rate, exp: r.exp, avail: r.avail,
-    services: JSON.parse(r.services), bio: r.bio,
-    rating: r.reviews ? Math.round(r.avg * 10) / 10 : null, reviews: r.reviews,
-  });
-
-  const HK_SQL = `SELECT p.*, u.name,
-      (SELECT AVG(rating) FROM reviews WHERE hk_id = p.user_id) AS avg,
-      (SELECT COUNT(*) FROM reviews WHERE hk_id = p.user_id) AS reviews
-    FROM profiles p JOIN users u ON u.id = p.user_id`;
+  // Behind a hosting proxy every connection comes from the proxy, so use the address it appended to X-Forwarded-For.
+  const clientIp = (req) => {
+    if (trustProxy) {
+      const parts = String(req.headers["x-forwarded-for"] || "").split(",").map((x) => x.trim()).filter(Boolean);
+      if (parts.length) return parts[parts.length - 1];
+    }
+    return req.socket.remoteAddress;
+  };
 
   const routes = [];
   const route = (method, pattern, handler, { auth: needAuth = false, role } = {}) =>
@@ -83,25 +95,31 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
     const password = typeof body.password === "string" ? body.password : "";
     if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters");
     if (!["seeker", "housekeeper"].includes(body.role)) throw bad("role must be seeker or housekeeper");
-    if (db.prepare("SELECT 1 FROM users WHERE email = ?").get(email)) throw new HttpError(409, "email already registered");
-    const { lastInsertRowid } = db.prepare("INSERT INTO users (email,name,role,pass_hash) VALUES (?,?,?,?)")
-      .run(email, name, body.role, auth.hashPassword(password));
-    setToken(auth.createSession(db, Number(lastInsertRowid)));
-    return [201, { id: Number(lastInsertRowid), email, name, role: body.role }];
+    if (await db.one("SELECT 1 FROM users WHERE email = $1", [email])) throw new HttpError(409, "email already registered");
+    let row;
+    try {
+      row = await db.one("INSERT INTO users (email,name,role,pass_hash) VALUES ($1,$2,$3,$4) RETURNING id",
+        [email, name, body.role, auth.hashPassword(password)]);
+    } catch (e) {
+      if (db.isUniqueViolation(e)) throw new HttpError(409, "email already registered"); // lost a race with another signup
+      throw e;
+    }
+    setToken(await auth.createSession(db, row.id));
+    return [201, { id: row.id, email, name, role: body.role }];
   });
 
   route("POST", "/api/login", async ({ body, ip, setToken }) => {
     limitAuth(ip);
     const email = str(body.email, 200).toLowerCase();
-    const row = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+    const row = await db.one("SELECT * FROM users WHERE email = $1", [email]);
     const ok = row && typeof body.password === "string" && auth.verifyPassword(body.password, row.pass_hash);
     if (!ok) throw new HttpError(401, "wrong email or password");
-    setToken(auth.createSession(db, row.id));
+    setToken(await auth.createSession(db, row.id));
     return { id: row.id, email: row.email, name: row.name, role: row.role };
   });
 
   route("POST", "/api/logout", async ({ token, setToken }) => {
-    auth.destroySession(db, token);
+    await auth.destroySession(db, token);
     setToken(null);
     return { ok: true };
   });
@@ -110,12 +128,12 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
   route("POST", "/api/password-reset/request", async ({ body, ip }) => {
     limitAuth(ip);
     const email = str(body.email, 200).toLowerCase();
-    const user = db.prepare("SELECT id, email FROM users WHERE email = ?").get(email);
+    const user = await db.one("SELECT id, email FROM users WHERE email = $1", [email]);
     if (user) {
       const token = crypto.randomBytes(32).toString("base64url");
-      db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(user.id);
-      db.prepare("INSERT INTO password_resets (token_hash,user_id,expires_at) VALUES (?,?,?)")
-        .run(auth.sha256(token), user.id, Date.now() + RESET_TTL_MS);
+      await db.query("DELETE FROM password_resets WHERE user_id = $1 OR expires_at < now()", [user.id]);
+      await db.query("INSERT INTO password_resets (token_hash,user_id,expires_at) VALUES ($1,$2,$3)",
+        [auth.sha256(token), user.id, new Date(Date.now() + RESET_TTL_MS)]);
       const link = `${appUrl.replace(/\/$/, "")}/reset.html?token=${token}`;
       try {
         await sendMail({
@@ -135,24 +153,23 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
     const password = typeof body.password === "string" ? body.password : "";
     if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters");
     const token = typeof body.token === "string" ? body.token : "";
-    const row = db.prepare("SELECT * FROM password_resets WHERE token_hash = ?").get(auth.sha256(token));
-    if (!row || row.expires_at < Date.now()) {
-      if (row) db.prepare("DELETE FROM password_resets WHERE token_hash = ?").run(row.token_hash);
-      throw bad("this reset link is invalid or has expired");
-    }
-    db.prepare("UPDATE users SET pass_hash = ? WHERE id = ?").run(auth.hashPassword(password), row.user_id);
-    db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(row.user_id);
-    auth.destroyAllSessions(db, row.user_id); // anyone holding an old session is signed out
+    // Single atomic statement: only one request can ever consume a given token.
+    const row = await db.one("DELETE FROM password_resets WHERE token_hash = $1 RETURNING user_id, expires_at > now() AS valid",
+      [auth.sha256(token)]);
+    if (!row || !row.valid) throw bad("this reset link is invalid or has expired");
+    await db.query("UPDATE users SET pass_hash = $1 WHERE id = $2", [auth.hashPassword(password), row.user_id]);
+    await db.query("DELETE FROM password_resets WHERE user_id = $1", [row.user_id]);
+    await auth.destroyAllSessions(db, row.user_id); // anyone holding an old session is signed out
     return { ok: true };
   });
 
   // Permanently deletes the account and, via ON DELETE CASCADE, its profile, sessions, requests and reviews.
   route("POST", "/api/account/delete", async ({ user, body, setToken }) => {
-    const row = db.prepare("SELECT pass_hash FROM users WHERE id = ?").get(user.id);
+    const row = await db.one("SELECT pass_hash FROM users WHERE id = $1", [user.id]);
     if (typeof body.password !== "string" || !auth.verifyPassword(body.password, row.pass_hash)) {
       throw new HttpError(403, "wrong password");
     }
-    db.prepare("DELETE FROM users WHERE id = ?").run(user.id);
+    await db.query("DELETE FROM users WHERE id = $1", [user.id]);
     setToken(null);
     return { ok: true };
   }, { auth: true });
@@ -160,25 +177,37 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
   route("GET", "/api/me", async ({ user }) => {
     if (!user) return { user: null };
     const profile = user.role === "housekeeper"
-      ? db.prepare("SELECT * FROM profiles WHERE user_id = ?").get(user.id)
+      ? await db.one("SELECT city, phone, rate, exp, avail, services, bio FROM profiles WHERE user_id = $1", [user.id])
       : null;
-    return { user, profile: profile && { ...profile, services: JSON.parse(profile.services) } };
+    return { user, profile };
   });
 
   // ---- housekeepers ----
   route("GET", "/api/housekeepers", async ({ query }) => {
-    let rows = db.prepare(HK_SQL).all().map(housekeeperRow);
     const { service, city, maxRate, avail, sort } = Object.fromEntries(query);
-    if (service) rows = rows.filter((h) => h.services.includes(service));
-    if (city) rows = rows.filter((h) => h.city.toLowerCase().includes(city.toLowerCase()));
-    if (Number(maxRate) > 0) rows = rows.filter((h) => h.rate <= Number(maxRate));
-    if (avail) rows = rows.filter((h) => h.avail === avail);
-    const by = {
-      rate: (a, b) => a.rate - b.rate,
-      exp: (a, b) => b.exp - a.exp,
-      rating: (a, b) => (b.rating ?? 0) - (a.rating ?? 0),
-    }[sort] || ((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-    return rows.sort(by);
+    const where = [], params = [];
+    const add = (sql, v) => { params.push(v); where.push(sql.replace("?", `$${params.length}`)); };
+    if (service) add("p.services @> jsonb_build_array(?::text)", service);
+    if (city) add("p.city ILIKE '%' || ? || '%'", likeEscape(city));
+    if (Number(maxRate) > 0) add("p.rate <= ?", Math.min(Math.floor(Number(maxRate)), 2147483647));
+    if (avail) add("p.avail = ?", avail);
+    const order = {
+      rate: "p.rate ASC",
+      exp: "p.exp DESC",
+      rating: "r.avg DESC NULLS LAST",
+    }[sort] || "r.avg DESC NULLS LAST";
+    const rows = await db.query(
+      `SELECT p.user_id AS id, u.name, p.city, p.rate, p.exp, p.avail, p.services, p.bio,
+              ROUND(r.avg::numeric, 1)::float8 AS rating, COALESCE(r.n, 0) AS reviews
+       FROM profiles p
+       JOIN users u ON u.id = p.user_id
+       LEFT JOIN (SELECT hk_id, AVG(rating) AS avg, COUNT(*)::int AS n FROM reviews GROUP BY hk_id) r ON r.hk_id = p.user_id
+       ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       ORDER BY ${order}, p.user_id
+       LIMIT 200`,
+      params
+    );
+    return rows;
   });
 
   route("PUT", "/api/profile", async ({ user, body }) => {
@@ -190,67 +219,88 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
     if (!Number.isInteger(exp) || exp < 0 || exp > 80) throw bad("invalid experience");
     const phone = str(body.phone, 30, { required: true, label: "phone" });
     if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone");
-    db.prepare(
-      `INSERT INTO profiles (user_id,city,phone,rate,exp,avail,services,bio) VALUES (?,?,?,?,?,?,?,?)
-       ON CONFLICT(user_id) DO UPDATE SET city=excluded.city, phone=excluded.phone, rate=excluded.rate,
-         exp=excluded.exp, avail=excluded.avail, services=excluded.services, bio=excluded.bio`
-    ).run(user.id, str(body.city, 100, { required: true, label: "city" }), phone, rate, exp, body.avail,
-      JSON.stringify(services), str(body.bio, 1000));
+    await db.query(
+      `INSERT INTO profiles (user_id,city,phone,rate,exp,avail,services,bio) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
+       ON CONFLICT (user_id) DO UPDATE SET city=EXCLUDED.city, phone=EXCLUDED.phone, rate=EXCLUDED.rate,
+         exp=EXCLUDED.exp, avail=EXCLUDED.avail, services=EXCLUDED.services, bio=EXCLUDED.bio`,
+      [user.id, str(body.city, 100, { required: true, label: "city" }), phone, rate, exp, body.avail,
+        JSON.stringify(services), str(body.bio, 1000)]
+    );
     return { ok: true };
   }, { auth: true, role: "housekeeper" });
 
   // ---- requests ----
   route("POST", "/api/requests", async ({ user, body }) => {
-    const hkId = Number(body.housekeeperId);
-    if (!db.prepare("SELECT 1 FROM profiles WHERE user_id = ?").get(hkId)) throw new HttpError(404, "housekeeper not found");
+    const hkId = toId(body.housekeeperId);
+    if (!hkId || !(await db.one("SELECT 1 FROM profiles WHERE user_id = $1", [hkId]))) throw new HttpError(404, "housekeeper not found");
     const phone = str(body.phone, 30, { required: true, label: "phone" });
     if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone");
-    const dup = db.prepare("SELECT 1 FROM requests WHERE seeker_id=? AND hk_id=? AND status='pending'").get(user.id, hkId);
-    if (dup) throw new HttpError(409, "you already have a pending request with this housekeeper");
-    const { lastInsertRowid } = db.prepare(
-      "INSERT INTO requests (seeker_id,hk_id,seeker_phone,when_text,note) VALUES (?,?,?,?,?)"
-    ).run(user.id, hkId, phone, str(body.when, 200), str(body.note, 1000));
-    return [201, { id: Number(lastInsertRowid) }];
+    try {
+      const row = await db.one(
+        "INSERT INTO requests (seeker_id,hk_id,seeker_phone,when_text,note) VALUES ($1,$2,$3,$4,$5) RETURNING id",
+        [user.id, hkId, phone, str(body.when, 200), str(body.note, 1000)]
+      );
+      return [201, { id: row.id }];
+    } catch (e) {
+      if (db.isUniqueViolation(e)) throw new HttpError(409, "you already have a pending request with this housekeeper");
+      throw e;
+    }
   }, { auth: true, role: "seeker" });
 
   route("GET", "/api/requests", async ({ user }) => {
     if (user.role === "seeker") {
-      return db.prepare(
+      return db.query(
         `SELECT r.id, r.status, r.when_text AS "when", r.note, r.created_at, r.hk_id, u.name AS hk_name,
            CASE WHEN r.status = 'accepted' THEN p.phone END AS hk_phone,
            (SELECT rating FROM reviews WHERE request_id = r.id) AS my_rating
          FROM requests r JOIN users u ON u.id = r.hk_id JOIN profiles p ON p.user_id = r.hk_id
-         WHERE r.seeker_id = ? ORDER BY r.id DESC`
-      ).all(user.id);
+         WHERE r.seeker_id = $1 ORDER BY r.id DESC`,
+        [user.id]
+      );
     }
-    return db.prepare(
+    return db.query(
       `SELECT r.id, r.status, r.when_text AS "when", r.note, r.created_at, u.name AS seeker_name, r.seeker_phone
-       FROM requests r JOIN users u ON u.id = r.seeker_id WHERE r.hk_id = ? ORDER BY r.id DESC`
-    ).all(user.id);
+       FROM requests r JOIN users u ON u.id = r.seeker_id WHERE r.hk_id = $1 ORDER BY r.id DESC`,
+      [user.id]
+    );
   }, { auth: true });
 
   route("PATCH", "/api/requests/:id", async ({ user, body, params }) => {
     if (!["accepted", "declined"].includes(body.status)) throw bad("status must be accepted or declined");
-    const r = db.prepare("SELECT * FROM requests WHERE id = ? AND hk_id = ?").get(Number(params.id), user.id);
-    if (!r) throw new HttpError(404, "request not found");
-    if (r.status !== "pending") throw new HttpError(409, "request already answered");
-    db.prepare("UPDATE requests SET status = ? WHERE id = ?").run(body.status, r.id);
-    return { ok: true };
+    const id = toId(params.id);
+    // Atomic: only a still-pending request can be answered, so two quick taps can't both win.
+    const done = id && await db.one(
+      "UPDATE requests SET status = $1 WHERE id = $2 AND hk_id = $3 AND status = 'pending' RETURNING id",
+      [body.status, id, user.id]
+    );
+    if (done) return { ok: true };
+    const exists = id && await db.one("SELECT 1 FROM requests WHERE id = $1 AND hk_id = $2", [id, user.id]);
+    throw exists ? new HttpError(409, "request already answered") : new HttpError(404, "request not found");
   }, { auth: true, role: "housekeeper" });
 
   route("POST", "/api/requests/:id/review", async ({ user, body, params }) => {
-    const r = db.prepare("SELECT * FROM requests WHERE id = ? AND seeker_id = ?").get(Number(params.id), user.id);
+    const id = toId(params.id);
+    const r = id && await db.one("SELECT status, hk_id FROM requests WHERE id = $1 AND seeker_id = $2", [id, user.id]);
     if (!r) throw new HttpError(404, "request not found");
     if (r.status !== "accepted") throw new HttpError(409, "you can only review accepted requests");
     const rating = Number(body.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw bad("rating must be 1–5");
-    if (db.prepare("SELECT 1 FROM reviews WHERE request_id = ?").get(r.id)) throw new HttpError(409, "already reviewed");
-    db.prepare("INSERT INTO reviews (request_id,hk_id,rating,comment) VALUES (?,?,?,?)")
-      .run(r.id, r.hk_id, rating, str(body.comment, 1000));
+    try {
+      await db.query("INSERT INTO reviews (request_id,hk_id,rating,comment) VALUES ($1,$2,$3,$4)",
+        [id, r.hk_id, rating, str(body.comment, 1000)]);
+    } catch (e) {
+      if (db.isUniqueViolation(e)) throw new HttpError(409, "already reviewed");
+      throw e;
+    }
     return [201, { ok: true }];
   }, { auth: true, role: "seeker" });
 
   route("GET", "/api/meta", async () => ({ services: SERVICES, availability: AVAIL }));
+
+  route("GET", "/healthz", async () => {
+    await db.one("SELECT 1");
+    return { ok: true };
+  });
 
   // ---- dispatch ----
   async function handleApi(req, res, url) {
@@ -260,7 +310,7 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
     let token = bearer ? bearer[1] : cookies.sid;
     let cookieOut;
     const setToken = (t) => { token = t; cookieOut = auth.sessionCookie(t, secureCookies); };
-    const user = auth.userFromToken(db, token);
+    const user = await auth.userFromToken(db, token);
 
     let matched = null, params = {}, pathMatch = false;
     for (const r of routes) {
@@ -274,7 +324,7 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
     if (matched.role && user.role !== matched.role) throw new HttpError(403, `only ${matched.role}s can do this`);
 
     const body = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) ? await readJson(req) : {};
-    const out = await matched.handler({ user, body, params, query: url.searchParams, token, setToken, ip: req.socket.remoteAddress });
+    const out = await matched.handler({ user, body, params, query: url.searchParams, token, setToken, ip: clientIp(req) });
     let [status, payload] = Array.isArray(out) && typeof out[0] === "number" ? out : [200, out];
     // Native apps can't rely on cookies: hand them the session token in the body. Browsers never get it
     // in JS-readable form (a cross-site page can't set X-Client without a CORS preflight, which we don't allow).
@@ -297,7 +347,7 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://localhost");
-      if (url.pathname.startsWith("/api/")) await handleApi(req, res, url);
+      if (url.pathname.startsWith("/api/") || url.pathname === "/healthz") await handleApi(req, res, url);
       else serveStatic(req, res, url);
     } catch (e) {
       const status = e.status || 500;
@@ -306,7 +356,7 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
       res.end(JSON.stringify({ error: status === 500 ? "internal error" : e.message }));
     }
   });
-  server.on("close", () => db.close());
+  server.on("close", () => { db.close().catch((e) => console.error("db close failed:", e.message)); });
   return { server, db };
 }
 
