@@ -16,12 +16,12 @@ async function start(opts = {}) {
   await new Promise((r) => server.listen(0, r));
   const base = `http://localhost:${server.address().port}`;
   // tiny client that keeps a cookie jar per "browser"
-  const client = () => {
+  const client = (extraHeaders = {}) => {
     let cookie = "";
     return async (method, path, body) => {
       const res = await fetch(base + path, {
         method,
-        headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...(cookie ? { Cookie: cookie } : {}) },
+        headers: { ...extraHeaders, ...(body ? { "Content-Type": "application/json" } : {}), ...(cookie ? { Cookie: cookie } : {}) },
         body: body ? JSON.stringify(body) : undefined,
       });
       const set = res.headers.get("set-cookie");
@@ -819,4 +819,242 @@ test("sample data: the owner is built in, so no host setting is needed", async (
   assert.equal((await owner("GET", "/api/me")).body.isAdmin, true);
   assert.equal((await other("GET", "/api/me")).body.isAdmin, undefined);
   assert.equal((await other("POST", "/api/admin/sample-data", { action: "add" })).status, 404);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Languages: error codes, email language, Unicode handling
+// ---------------------------------------------------------------------------------------------------------------------
+const { ERROR_CODES } = require("../server/app");
+const fs = require("node:fs");
+const path = require("node:path");
+const LOC = (l) => JSON.parse(fs.readFileSync(path.join(__dirname, "..", "public", "i18n", `${l}.json`), "utf8"));
+
+test("errors carry a stable machine code next to the unchanged English text and status", async (t) => {
+  const { server, client, register } = await start();
+  t.after(() => server.close());
+  const a = client(), b = client(), anon = client();
+  await register(a, { email: "a@x.com", name: "Alice", password: "password123", role: "housekeeper" });
+  const unverified = client();
+  await unverified("POST", "/api/register", { email: "u@x.com", name: "U", password: "password123", role: "seeker" });
+  await a("PUT", "/api/profile", profile);
+  const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
+  await register(b, { email: "b@x.com", name: "Bob", password: "password123", role: "seeker" });
+  const sent = (await b("POST", "/api/requests", { housekeeperId: hkId, phone: "99999 00000" })).body.id;
+  const long = "x".repeat(1001);
+
+  // [client, method, path, body, status, code, English text]
+  const cases = [
+    [anon, "POST", "/api/register", { email: "", name: "N", password: "password123", role: "seeker" }, 400, "email_required", "email is required"],
+    [anon, "POST", "/api/register", { email: "c@x.com", name: "", password: "password123", role: "seeker" }, 400, "name_required", "name is required"],
+    [anon, "POST", "/api/register", { email: "not-an-email", name: "N", password: "password123", role: "seeker" }, 400, "invalid_email", "invalid email"],
+    [anon, "POST", "/api/register", { email: "c@x.com", name: "N", password: "short", role: "seeker" }, 400, "password_length", "password must be 8–200 characters"],
+    [anon, "POST", "/api/register", { email: "c@x.com", name: "N", password: "password123", role: "boss" }, 400, "invalid_role", "role must be seeker, housekeeper or both"],
+    [anon, "POST", "/api/register", { email: "a@x.com", name: "N", password: "password123", role: "seeker" }, 409, "email_taken", "email already registered"],
+    [anon, "POST", "/api/login", { email: "a@x.com", password: "wrong-password" }, 401, "wrong_credentials", "wrong email or password"],
+    [anon, "POST", "/api/email-verification/confirm", { token: "nope" }, 400, "verify_link_invalid", "this confirmation link is invalid or has expired"],
+    [anon, "POST", "/api/password-reset/confirm", { token: "nope", password: "password123" }, 400, "reset_link_invalid", "this reset link is invalid or has expired"],
+    [anon, "POST", "/api/password-reset/confirm", { token: "nope", password: "x" }, 400, "password_length", "password must be 8–200 characters"],
+    [a, "POST", "/api/account/delete", { password: "wrong" }, 403, "wrong_password", "wrong password"],
+    [a, "PUT", "/api/profile", { ...profile, services: [] }, 400, "invalid_services", "choose at least one valid service"],
+    [a, "PUT", "/api/profile", { ...profile, avail: "Never" }, 400, "invalid_avail", "invalid availability"],
+    [a, "PUT", "/api/profile", { ...profile, rate: -1 }, 400, "invalid_rate", "invalid rate"],
+    [a, "PUT", "/api/profile", { ...profile, exp: 99 }, 400, "invalid_exp", "invalid experience"],
+    [a, "PUT", "/api/profile", { ...profile, phone: "abc" }, 400, "invalid_phone", "invalid phone"],
+    [a, "PUT", "/api/profile", { ...profile, city: "" }, 400, "city_required", "city is required"],
+    [a, "PUT", "/api/profile", { ...profile, phone: "" }, 400, "phone_required", "phone is required"],
+    [a, "PUT", "/api/profile", { ...profile, bio: long }, 400, "field_too_long", "field is too long"],
+    [b, "POST", "/api/requests", { housekeeperId: hkId, phone: "99999 00000" }, 409, "request_pending", "you already have a pending request with this housekeeper"],
+    [b, "POST", "/api/requests", { housekeeperId: 999999, phone: "99999 00000" }, 404, "housekeeper_not_found", "housekeeper not found"],
+    [a, "POST", "/api/requests", { housekeeperId: (await a("GET", "/api/me")).body.user.id, phone: "99999 00000" }, 400, "request_self", "You can't send a request to yourself."],
+    [b, "GET", "/api/requests?as=nope", undefined, 400, "invalid_as", "as must be sent or received"],
+    [a, "PATCH", `/api/requests/${sent}`, { status: "maybe" }, 400, "invalid_status", "status must be accepted or declined"],
+    [a, "PATCH", "/api/requests/999999", { status: "accepted" }, 404, "request_not_found", "request not found"],
+    [b, "POST", `/api/requests/${sent}/review`, { rating: 5 }, 409, "review_needs_accepted", "you can only review accepted requests"],
+    [b, "POST", "/api/requests/999999/review", { rating: 5 }, 404, "request_not_found", "request not found"],
+    [b, "GET", "/api/requests/999999/messages", undefined, 404, "conversation_not_found", "conversation not found"],
+    [b, "GET", `/api/requests/${sent}/messages`, undefined, 409, "messaging_not_open", "Messaging opens once the housekeeper accepts the request."],
+    [anon, "GET", "/api/requests", undefined, 401, "sign_in_required", "sign in required"],
+    [b, "POST", "/api/admin/sample-data", { action: "add" }, 404, "not_found", "not found"],
+    [anon, "GET", "/api/nope", undefined, 404, "not_found", "not found"],
+    [anon, "DELETE", "/api/meta", undefined, 405, "method_not_allowed", "method not allowed"],
+    [unverified, "POST", "/api/requests", { housekeeperId: hkId, phone: "99999 00000" }, 403, "email_not_verified", "Please verify your email address first. We sent you a link when you signed up."],
+    [unverified, "POST", "/api/email-verification/resend", {}, 429, "resend_cooldown", "We just sent you an email. Please wait a minute before asking for another."],
+  ];
+  for (const [c, method, p, body, status, code, text] of cases) {
+    const r = await c(method, p, body);
+    assert.equal(r.status, status, `${method} ${p}`);
+    assert.equal(r.body.code, code, `${method} ${p} -> ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.error, text, `${method} ${p}`);
+    assert.ok(ERROR_CODES.includes(r.body.code));
+  }
+  // limits report the limit so the apps can say it in any language
+  const tooLong = await a("PUT", "/api/profile", { ...profile, bio: long });
+  assert.deepEqual(tooLong.body.params, { max: 1000 });
+  // non-JSON body and oversize body
+  assert.equal((await fetch(`http://localhost:${server.address().port}/api/login`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: "x" })).status, 415);
+  const bad = await fetch(`http://localhost:${server.address().port}/api/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{not json" });
+  assert.equal(bad.status, 400); assert.equal((await bad.json()).code, "invalid_json");
+  const mt = await fetch(`http://localhost:${server.address().port}/api/login`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: "x" });
+  assert.equal((await mt.json()).code, "unsupported_media_type");
+});
+
+test("every error code has a message in every language, and nothing else is claimed", () => {
+  for (const l of ["en", "hi", "mr", "bn", "ta", "te", "kn", "ml", "gu", "pa"]) {
+    const keys = Object.keys(LOC(l)).filter((k) => k.startsWith("err.")).map((k) => k.slice(4)).sort();
+    assert.deepEqual(keys, [...ERROR_CODES].sort(), l);
+  }
+});
+
+test("source scan: every HttpError / bad() in the server names a code", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "server", "app.js"), "utf8");
+  const calls = [...src.matchAll(/new HttpError\(([^;]*?)\);?\s*(?:\n|$)/g)].map((m) => m[1]).concat([...src.matchAll(/\bbad\(([^;]*?)\)(?=[;\s)])/g)].map((m) => m[1]))
+    .filter((args) => !/^400, m, code, params$|^status, message, code, params$/.test(args)); // the definitions themselves
+  assert.ok(calls.length > 40);
+  for (const args of calls) assert.match(args, /"[a-z_]+"|`\$\{label\}_required`/, `no code in: ${args}`);
+});
+
+test("emails are sent in the language the client is showing, English by default", async (t) => {
+  const { server, client, mails, register } = await start();
+  t.after(() => server.close());
+  const lastMail = (to) => [...mails].reverse().find((m) => m.to === to);
+
+  // new accounts: one per language header
+  const cases = [
+    ["hi", { "Accept-Language": "hi" }], ["mr", { "Accept-Language": "mr-IN" }], ["bn", { "Accept-Language": "bn-BD,en;q=0.5" }],
+    ["ta", { "Accept-Language": "ta" }], ["te", { "Accept-Language": "te" }], ["kn", { "Accept-Language": "kn" }],
+    ["ml", { "Accept-Language": "ml" }], ["gu", { "Accept-Language": "gu" }], ["pa", { "Accept-Language": "pa-IN" }],
+  ];
+  for (const [l, headers] of cases) {
+    const email = `${l}@x.com`;
+    const c = client(headers);
+    assert.equal((await c("POST", "/api/register", { email, name: "Mia <b>", password: "password123", role: "seeker" })).status, 201);
+    const m = lastMail(email);
+    const loc = LOC(l);
+    assert.equal(m.subject, loc["email.verify.subject"], l);
+    assert.equal(m.lang, l);
+    assert.ok(m.text.startsWith(loc["email.verify.body"].split("{name}")[0] + "Mia <b>"), l);   // name is plain text, not escaped or altered
+    assert.match(m.text, /\/verify\.html\?token=[\w-]+/);
+    assert.match(m.subject, /[^\x00-\x7F]/); // really non-ASCII
+  }
+  // English: exactly the old wording
+  const en = client();
+  await en("POST", "/api/register", { email: "en@x.com", name: "Eve", password: "password123", role: "seeker" });
+  assert.equal(lastMail("en@x.com").subject, "Confirm your email for Help Seeker");
+  assert.match(lastMail("en@x.com").text, /^Hi Eve,\n\nConfirm your email address to start using Help Seeker \(link valid for 24 hours\):/);
+  assert.equal(lastMail("en@x.com").lang, "en");
+
+  // resend and password reset follow the language too (and a fresh reset link works regardless of language)
+  const hi = client({ "Accept-Language": "hi" });
+  const reset = await hi("POST", "/api/password-reset/request", { email: "en@x.com" });
+  assert.equal(reset.status, 200);
+  assert.equal(reset.body.message, "If that email has an account, a reset link is on its way."); // same answer in every language
+  assert.equal(lastMail("en@x.com").subject, LOC("hi")["email.reset.subject"]);
+  assert.match(lastMail("en@x.com").text, /\/reset\.html\?token=/);
+  const mr = client({ "Accept-Language": "mr" });
+  await mr("POST", "/api/password-reset/request", { email: "en@x.com" });
+  assert.equal(lastMail("en@x.com").subject, LOC("mr")["email.reset.subject"]);
+});
+
+test("resend uses the current language", async (t) => {
+  const { server, client, mails, db } = await start();
+  t.after(() => server.close());
+  const c = client({ "Accept-Language": "en" });
+  await c("POST", "/api/register", { email: "r@x.com", name: "R", password: "password123", role: "seeker" });
+  await db.query("UPDATE email_verifications SET created_at = now() - interval '2 minutes'");
+  const ta = client({ "Accept-Language": "ta" });
+  await ta("POST", "/api/login", { email: "r@x.com", password: "password123" });
+  assert.equal((await ta("POST", "/api/email-verification/resend", {})).status, 200);
+  assert.equal(mails.at(-1).subject, LOC("ta")["email.verify.subject"]);
+});
+
+test("the language header can only select a template: bad values fall back to English and never reach SQL, subject or body", async (t) => {
+  const { server, client, mails, db } = await start();
+  t.after(() => server.close());
+  const evil = [
+    "xx", "", "*", "hi-Latn", "pa-Arab", "pa-PK", "en-US;q=abc", "hi;q=0", "'; DROP TABLE users; --", "hi\r\nBcc: attacker@x.com",
+    "<script>alert(1)</script>", "../../etc/passwd", "hi".repeat(2000), "én", "ＨＩ", "hi;q=1;x=y",
+  ];
+  let n = 0;
+  for (const h of evil) {
+    n++;
+    const email = `evil${n}@x.com`;
+    let res;
+    try {
+      res = await fetch(`http://localhost:${server.address().port}/api/register`, {
+        method: "POST", headers: { "Content-Type": "application/json", "Accept-Language": h },
+        body: JSON.stringify({ email, name: "Evil", password: "password123", role: "seeker" }),
+      });
+    } catch { continue; } // Node refuses to even send a header with CR/LF; that is the same safe outcome
+    assert.equal(res.status, 201, JSON.stringify(h));
+    const m = mails.find((x) => x.to === email);
+    assert.equal(m.subject, "Confirm your email for Help Seeker", JSON.stringify(h));
+    assert.equal(m.lang, "en", JSON.stringify(h));
+    assert.ok(!m.text.includes("DROP") && !m.text.includes("<script>") && !m.text.includes("attacker"), JSON.stringify(h));
+  }
+  assert.ok((await db.one("SELECT COUNT(*)::int AS n FROM users")).n >= 10); // the table is intact
+  // q-values and region fallback decide between several accepted languages
+  const pick = async (h) => { const e = `q${++n}@x.com`; await client({ "Accept-Language": h })("POST", "/api/register", { email: e, name: "Q", password: "password123", role: "seeker" }); return mails.find((x) => x.to === e).lang; };
+  assert.equal(await pick("fr, mr;q=0.9, hi;q=0.5"), "mr");
+  assert.equal(await pick("hi;q=0.2, ta;q=0.8, en;q=0.1"), "ta");
+  assert.equal(await pick("hi-IN"), "hi");
+  assert.equal(await pick("es-MX, en-GB"), "en");
+});
+
+test("nothing about the language is stored: the schema has no language column", async (t) => {
+  const { server, db } = await start();
+  t.after(() => server.close());
+  const cols = await db.query("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema()");
+  assert.ok(!cols.some((c) => /lang|locale/i.test(c.column_name)));
+});
+
+test("Indic text: stored untouched, searched in Unicode NFC, limits count characters people see", async (t) => {
+  const { server, client, register, db } = await start();
+  t.after(() => server.close());
+  const hk = client(), anon = client();
+  await register(hk, { email: "k@x.com", name: "सुनीता <b>", password: "password123", role: "housekeeper" });
+  const decomposed = "Café पुसद"; // "é" typed as e + combining accent
+  assert.equal((await hk("PUT", "/api/profile", { ...profile, city: decomposed, bio: "मैं खाना बनाती हूँ 🙂 {n} {name}" })).status, 200);
+  // the stored text is exactly what was typed (we only normalise to compare)
+  assert.equal((await db.one("SELECT city FROM profiles")).city, decomposed);
+  for (const q of ["Café", "Café", "café", "पुसद"]) { // composed and decomposed forms both find it
+    const r = await anon("GET", "/api/housekeepers?city=" + encodeURIComponent(q));
+    assert.equal(r.body.length, 1, q);
+    assert.equal(r.body[0].city, decomposed);
+    assert.equal(r.body[0].name, "सुनीता <b>");
+    assert.equal(r.body[0].bio, "मैं खाना बनाती हूँ 🙂 {n} {name}");
+  }
+  // "Cafe" is a different word from "Café" for everybody: the stored decomposed form must not make it match
+  assert.equal((await anon("GET", "/api/housekeepers?city=" + encodeURIComponent("Cafe"))).body.length, 0);
+  assert.equal((await anon("GET", "/api/housekeepers?city=Cafx")).body.length, 0);
+
+  // 1000 characters means 1000 as a person counts them: 1000 x "क्षि" is 3000 code units and is allowed; 1001 is not
+  const cluster = "क्षि";
+  assert.equal(cluster.length, 4);
+  assert.equal((await hk("PUT", "/api/profile", { ...profile, bio: cluster.repeat(1000) })).status, 200);
+  const over = await hk("PUT", "/api/profile", { ...profile, bio: cluster.repeat(1001) });
+  assert.equal(over.status, 400); assert.equal(over.body.code, "field_too_long");
+  // English limits are unchanged
+  assert.equal((await hk("PUT", "/api/profile", { ...profile, bio: "a".repeat(1000) })).status, 200);
+  assert.equal((await hk("PUT", "/api/profile", { ...profile, bio: "a".repeat(1001) })).status, 400);
+  // chat messages use the same limit
+  const seeker = client();
+  await register(seeker, { email: "s@x.com", name: "Sam", password: "password123", role: "seeker" });
+  const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
+  const reqId = (await seeker("POST", "/api/requests", { housekeeperId: hkId, phone: "99999 00000" })).body.id;
+  await hk("PATCH", `/api/requests/${reqId}`, { status: "accepted" });
+  assert.equal((await seeker("POST", `/api/requests/${reqId}/messages`, { body: "नमस्ते ".repeat(142) })).status, 201); // 994 characters, ~3500 code units
+  assert.equal((await seeker("POST", `/api/requests/${reqId}/messages`, { body: "क".repeat(1001) })).status, 400);
+});
+
+test("static files are served as UTF-8 and every language file is reachable", async (t) => {
+  const { server } = await start();
+  t.after(() => server.close());
+  const base = `http://localhost:${server.address().port}`;
+  for (const l of ["en", "hi", "mr", "bn", "ta", "te", "kn", "ml", "gu", "pa"]) {
+    const r = await fetch(`${base}/i18n/${l}.json`);
+    assert.equal(r.status, 200); assert.match(r.headers.get("content-type"), /^application\/json; charset=utf-8$/);
+    assert.deepEqual(await r.json(), LOC(l));
+  }
+  for (const f of ["/i18n/core.js", "/i18n/web.js", "/app.js"]) assert.match((await fetch(base + f)).headers.get("content-type"), /charset=utf-8/);
+  assert.match((await fetch(base + "/style.css")).headers.get("content-type"), /charset=utf-8/);
 });

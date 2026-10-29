@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Help Seeker – Find a Housekeeper</title>
+  <title data-i18n="app.title">Help Seeker – Find a Housekeeper</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <div class="top">
       <h1>Help Seeker</h1>
+      <div id="lang-slot"></div>
       <div id="who"></div>
     </div>
-    <p>Find trusted housekeepers for cleaning, dishwashing, cooking and more.</p>
+    <p data-i18n="app.tagline">Find trusted housekeepers for cleaning, dishwashing, cooking and more.</p>
     <nav id="nav"></nav>
   </header>
 
@@ -20,23 +21,23 @@
     <div id="verify-banner" class="msg" hidden>
       <span id="verify-text"></span>
       <span class="actions">
-        <button type="button" id="resend-verify">Resend email</button>
-        <button type="button" class="ghost" id="recheck-verify">I've confirmed</button>
+        <button type="button" id="resend-verify" data-i18n="verify.resend">Resend email</button>
+        <button type="button" class="ghost" id="recheck-verify" data-i18n="verify.recheck">I've confirmed</button>
       </span>
     </div>
     <p id="msg" class="msg" role="status" hidden></p>
 
     <section id="find">
       <form id="filters" class="card">
-        <label>Service <select id="f-service"><option value="">Any</option></select></label>
-        <label>City / area <input id="f-city" placeholder="e.g. Pune"></label>
-        <label>Max rate / hour <input id="f-rate" type="number" min="0" placeholder="Any"></label>
-        <label>Availability <select id="f-avail"><option value="">Any</option></select></label>
-        <label>Sort by
+        <label><span data-i18n="filter.service">Service</span> <select id="f-service"><option value="" data-i18n="filter.any">Any</option></select></label>
+        <label><span data-i18n="filter.city">City / area</span> <input id="f-city" placeholder="e.g. Pune" data-i18n-placeholder="filter.city_ph" data-max="100"></label>
+        <label><span data-i18n="filter.max_rate">Max rate / hour</span> <input id="f-rate" type="number" min="0" placeholder="Any" data-i18n-placeholder="filter.any"></label>
+        <label><span data-i18n="filter.avail">Availability</span> <select id="f-avail"><option value="" data-i18n="filter.any">Any</option></select></label>
+        <label><span data-i18n="filter.sort">Sort by</span>
           <select id="f-sort">
-            <option value="rating">Rating</option>
-            <option value="rate">Lowest rate</option>
-            <option value="exp">Experience</option>
+            <option value="rating" data-i18n="sort.rating">Top rated</option>
+            <option value="rate" data-i18n="sort.rate">Lowest rate</option>
+            <option value="exp" data-i18n="sort.exp">Experience</option>
           </select>
         </label>
       </form>
@@ -47,66 +48,66 @@
     <section id="auth" hidden>
       <div class="grid">
         <form id="login-form" class="card stack">
-          <h2>Sign in</h2>
-          <label>Email <input name="email" type="email" autocomplete="username" required></label>
-          <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
-          <button type="submit">Sign in</button>
-          <button type="button" class="link" id="forgot">Forgot password?</button>
+          <h2 data-i18n="login.title">Sign in</h2>
+          <label><span data-i18n="field.email">Email</span> <input name="email" type="email" autocomplete="username" required></label>
+          <label><span data-i18n="field.password">Password</span> <input name="password" type="password" autocomplete="current-password" required></label>
+          <button type="submit" data-i18n="auth.signin">Sign in</button>
+          <button type="button" class="link" id="forgot" data-i18n="login.forgot">Forgot password?</button>
         </form>
         <form id="register-form" class="card stack">
-          <h2>Create account</h2>
-          <label>I am a
+          <h2 data-i18n="register.title">Create account</h2>
+          <label><span data-i18n="register.iam">I am a…</span>
             <select name="role">
-              <option value="seeker">household looking for help</option>
-              <option value="housekeeper">housekeeper looking for work</option>
-              <option value="both">both: I hire help and offer my services</option>
+              <option value="seeker" data-i18n="register.role.seeker">household looking for help</option>
+              <option value="housekeeper" data-i18n="register.role.housekeeper">housekeeper looking for work</option>
+              <option value="both" data-i18n="register.role.both">both: I hire help and offer my services</option>
             </select>
           </label>
-          <label>Name <input name="name" autocomplete="name" required maxlength="100"></label>
-          <label>Email <input name="email" type="email" autocomplete="username" required></label>
-          <label>Password (8+ characters) <input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
-          <button type="submit">Create account</button>
+          <label><span data-i18n="field.name">Name</span> <input name="name" autocomplete="name" required data-max="100"></label>
+          <label><span data-i18n="field.email">Email</span> <input name="email" type="email" autocomplete="username" required></label>
+          <label><span data-i18n="field.password_new">Password (8+ characters)</span> <input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+          <button type="submit" data-i18n="register.submit">Create account</button>
         </form>
       </div>
     </section>
 
     <section id="forgot-section" hidden>
       <form id="forgot-form" class="card stack">
-        <h2>Reset your password</h2>
-        <p class="muted">Enter your email and we'll send you a link to choose a new password.</p>
-        <label>Email <input name="email" type="email" autocomplete="username" required></label>
-        <button type="submit">Send reset link</button>
-        <button type="button" class="ghost" data-tab="auth">Back to sign in</button>
+        <h2 data-i18n="forgot.title">Reset your password</h2>
+        <p class="muted" data-i18n="forgot.hint">Enter your email and we'll send you a link to choose a new password.</p>
+        <label><span data-i18n="field.email">Email</span> <input name="email" type="email" autocomplete="username" required></label>
+        <button type="submit" data-i18n="forgot.submit">Send reset link</button>
+        <button type="button" class="ghost" data-tab="auth" data-i18n="forgot.back">Back to sign in</button>
       </form>
     </section>
 
     <section id="account" hidden>
       <form id="delete-form" class="card stack">
-        <h2>Delete my account</h2>
-        <p>This permanently deletes your account, profile, requests and reviews. It can't be undone.</p>
-        <label>Confirm with your password <input name="password" type="password" autocomplete="current-password" required></label>
-        <button type="submit" class="danger">Delete my account</button>
+        <h2 data-i18n="account.delete_title">Delete my account</h2>
+        <p data-i18n="account.delete_text">This permanently deletes your account, profile, requests and reviews. It can't be undone.</p>
+        <label><span data-i18n="account.delete_confirm_label">Confirm with your password</span> <input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit" class="danger" data-i18n="account.delete_button">Delete my account</button>
       </form>
     </section>
 
     <section id="profile" hidden>
       <form id="profile-form" class="card stack">
-        <h2>My housekeeper profile</h2>
-        <p class="muted">Offer your own services here. You can still hire other housekeepers with the same account.</p>
-        <p class="muted">Your phone number is only shared with households whose request you accept.</p>
-        <label>City / area <input name="city" required maxlength="100"></label>
-        <label>Phone <input name="phone" required pattern="[0-9+\-\(\) ]{7,}" maxlength="30"></label>
-        <label>Rate per hour <input name="rate" type="number" min="0" step="1" required></label>
-        <label>Years of experience <input name="exp" type="number" min="0" step="1" value="0"></label>
-        <label>Availability <select name="avail" id="p-avail"></select></label>
-        <fieldset><legend>Services you offer</legend><div id="svc-checks"></div></fieldset>
-        <label>About you <textarea name="bio" rows="3" maxlength="1000"></textarea></label>
-        <button type="submit">Save profile</button>
+        <h2 data-i18n="profile.title">My housekeeper profile</h2>
+        <p class="muted" data-i18n="profile.offer_hint">Offer your own services here. You can still hire other housekeepers with the same account.</p>
+        <p class="muted" data-i18n="profile.phone_hint">Your phone number is only shared with households whose request you accept.</p>
+        <label><span data-i18n="profile.city">City / area</span> <input name="city" required data-max="100"></label>
+        <label><span data-i18n="profile.phone">Phone</span> <input name="phone" type="tel" required pattern="[0-9+\-\(\) ]{7,}" maxlength="30"></label>
+        <label><span data-i18n="profile.rate">Rate per hour</span> <input name="rate" type="number" min="0" step="1" required></label>
+        <label><span data-i18n="profile.exp">Years of experience</span> <input name="exp" type="number" min="0" step="1" value="0"></label>
+        <label><span data-i18n="profile.avail">Availability</span> <select name="avail" id="p-avail"></select></label>
+        <fieldset><legend data-i18n="profile.services">Services you offer</legend><div id="svc-checks"></div></fieldset>
+        <label><span data-i18n="profile.bio">About you</span> <textarea name="bio" rows="3" data-max="1000"></textarea></label>
+        <button type="submit" data-i18n="profile.save">Save profile</button>
       </form>
     </section>
 
     <section id="requests" hidden>
-      <h2 id="req-title">Requests</h2>
+      <h2 id="req-title" data-i18n="req.title">Requests</h2>
       <div id="req-list" class="stack"></div>
     </section>
   </main>
@@ -114,12 +115,12 @@
   <dialog id="dlg">
     <form id="req-form" class="stack">
       <h3 id="dlg-title"></h3>
-      <label>Your phone <input name="phone" required pattern="[0-9+\-\(\) ]{7,}" maxlength="30"></label>
-      <label>When do you need help? <input name="when" placeholder="e.g. Mon–Fri mornings" maxlength="200"></label>
-      <label>Details <textarea name="note" rows="3" maxlength="1000" placeholder="Tasks, home size, language…"></textarea></label>
+      <label><span data-i18n="dlg.phone">Your phone</span> <input name="phone" type="tel" required pattern="[0-9+\-\(\) ]{7,}" maxlength="30"></label>
+      <label><span data-i18n="dlg.when">When do you need help?</span> <input name="when" placeholder="e.g. Mon–Fri mornings" data-i18n-placeholder="dlg.when_ph" data-max="200"></label>
+      <label><span data-i18n="dlg.note">Details</span> <textarea name="note" rows="3" data-max="1000" placeholder="Tasks, home size, language…" data-i18n-placeholder="dlg.note_ph"></textarea></label>
       <div class="row">
-        <button type="button" id="dlg-cancel" class="ghost">Cancel</button>
-        <button type="submit">Send request</button>
+        <button type="button" id="dlg-cancel" class="ghost" data-i18n="common.cancel">Cancel</button>
+        <button type="submit" data-i18n="dlg.submit">Send request</button>
       </div>
     </form>
   </dialog>
@@ -128,16 +129,18 @@
     <div class="stack">
       <div class="row between">
         <h3 id="chat-title"></h3>
-        <button type="button" class="ghost" id="chat-close">Close</button>
+        <button type="button" class="ghost" id="chat-close" data-i18n="common.close">Close</button>
       </div>
       <div id="chat-log" class="chat-log" role="log" aria-live="polite"></div>
       <form id="chat-form" class="row">
-        <input name="body" maxlength="1000" placeholder="Write a message…" autocomplete="off" required aria-label="Message">
-        <button type="submit">Send</button>
+        <input name="body" data-max="1000" placeholder="Write a message…" data-i18n-placeholder="chat.placeholder" autocomplete="off" required aria-label="Message" data-i18n-aria-label="chat.aria">
+        <button type="submit" data-i18n="common.send">Send</button>
       </form>
     </div>
   </dialog>
 
+  <script src="i18n/core.js"></script>
+  <script src="i18n/web.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

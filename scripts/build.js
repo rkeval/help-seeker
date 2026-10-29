@@ -5,8 +5,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.join(__dirname, "..");
-const dirs = ["server", "public", "e2e", "test", "scripts"];
-const required = ["public/index.html", "public/verify.html", "public/reset.html", "public/app.js", "public/style.css", "server/index.js"];
+const dirs = ["server", "public", "public/i18n", "e2e", "test", "scripts"];
+const required = ["public/index.html", "public/verify.html", "public/reset.html", "public/app.js", "public/i18n/core.js", "public/i18n/web.js", "public/i18n/en.json", "public/style.css", "server/index.js"];
 
 const files = dirs.flatMap((d) => fs.existsSync(path.join(root, d))
   ? fs.readdirSync(path.join(root, d)).filter((f) => f.endsWith(".js")).map((f) => path.join(d, f)) : []);

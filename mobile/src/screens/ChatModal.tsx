@@ -1,6 +1,7 @@
 import { ComponentRef, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, KeyboardAvoidingView, Modal, Platform, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 import { api } from "../api";
+import { core, useI18n } from "../i18n";
 import type { ChatMessage } from "../types";
 import { Button, Muted, useTheme } from "../ui";
 
@@ -9,6 +10,7 @@ const POLL_MS = 4000;
 // One conversation, tied to an accepted request. New messages are fetched every few seconds while it's open.
 export default function ChatModal({ requestId, name, onClose }: { requestId: number; name: string; onClose: () => void }) {
   const t = useTheme();
+  const { t: tx, dateTime } = useI18n();
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -32,9 +34,9 @@ export default function ChatModal({ requestId, name, onClose }: { requestId: num
       warned.current = false;
     } catch (e) {
       setMessages((cur) => cur ?? []); // show the empty state rather than a spinner forever; the next poll retries
-      if (!warned.current) { warned.current = true; Alert.alert("Couldn't load messages", (e as Error).message); } // once, not every 4 seconds
+      if (!warned.current) { warned.current = true; Alert.alert(tx("chat.load_failed"), (e as Error).message); } // once, not every 4 seconds
     }
-  }, [requestId, merge]);
+  }, [requestId, merge, tx]);
 
   useEffect(() => {
     void poll();
@@ -51,7 +53,7 @@ export default function ChatModal({ requestId, name, onClose }: { requestId: num
       setText("");
       merge([m]); // shown right away; `last` only moves on polls, so the other person's messages are never skipped
     } catch (e) {
-      Alert.alert("Couldn't send", (e as Error).message);
+      Alert.alert(tx("common.send_failed"), (e as Error).message);
     } finally {
       setSending(false);
     }
@@ -62,8 +64,8 @@ export default function ChatModal({ requestId, name, onClose }: { requestId: num
       <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 14 }}>
-            <Text style={{ color: t.fg, fontSize: 18, fontWeight: "700", flexShrink: 1 }}>Chat with {name}</Text>
-            <View><Button title="Close" kind="ghost" onPress={onClose} /></View>
+            <Text style={{ color: t.fg, fontSize: 18, fontWeight: "700", flexShrink: 1 }}>{tx("chat.title", { name })}</Text>
+            <View><Button title={tx("common.close")} kind="ghost" onPress={onClose} /></View>
           </View>
 
           <ScrollView
@@ -72,7 +74,7 @@ export default function ChatModal({ requestId, name, onClose }: { requestId: num
             contentContainerStyle={{ padding: 12, gap: 8 }}
             onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: false })}
           >
-            {messages !== null && messages.length === 0 && <Muted>No messages yet. Say hello!</Muted>}
+            {messages !== null && messages.length === 0 && <Muted>{tx("chat.empty")}</Muted>}
             {(messages ?? []).map((m) => (
               <View
                 key={m.id}
@@ -83,7 +85,7 @@ export default function ChatModal({ requestId, name, onClose }: { requestId: num
               >
                 <Text style={{ color: m.mine ? "#fff" : t.fg }}>{m.body}</Text>
                 <Text style={{ color: m.mine ? "#ffffffb3" : t.muted, fontSize: 11, marginTop: 2 }}>
-                  {new Date(m.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
+                  {dateTime(m.created_at)}
                 </Text>
               </View>
             ))}
@@ -92,15 +94,14 @@ export default function ChatModal({ requestId, name, onClose }: { requestId: num
           <View style={{ flexDirection: "row", gap: 8, padding: 12, alignItems: "flex-end" }}>
             <TextInput
               value={text}
-              onChangeText={setText}
-              placeholder="Write a message…"
+              placeholder={tx("chat.placeholder")}
               placeholderTextColor={t.muted}
-              maxLength={1000}
+              onChangeText={(v) => setText(core.truncateGraphemes(v, 1000))}
               multiline
-              accessibilityLabel="Message"
+              accessibilityLabel={tx("chat.aria")}
               style={{ flex: 1, maxHeight: 120, borderWidth: 1, borderColor: t.line, borderRadius: 12, padding: 10, color: t.fg, backgroundColor: t.card, fontSize: 16 }}
             />
-            <Button title="Send" onPress={send} disabled={sending || !text.trim()} />
+            <Button title={tx("common.send")} onPress={send} disabled={sending || !text.trim()} />
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>

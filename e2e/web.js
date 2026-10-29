@@ -271,7 +271,152 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await ow.click('[data-tab=find]'); await ow.fill('#f-city', 'Pusad'); await ow.waitForSelector('#count:has-text("0 housekeepers")');
   });
 
-  console.log('\n12. Health');
+  console.log('\n12. Languages');
+  const L = (lang) => JSON.parse(fs.readFileSync(require('path').join(__dirname, '..', 'public', 'i18n', lang + '.json'), 'utf8'));
+  const hi = L('hi'), mr = L('mr'), ml = L('ml'), ta = L('ta');
+  let fakeIp = 0; // the sign-in limiter allows 20 attempts per client address, so each language scenario gets its own (the server trusts X-Forwarded-For in this run)
+  const own = (opts = {}) => ({ ...opts, extraHTTPHeaders: { 'x-forwarded-for': `10.20.0.${++fakeIp}` } });
+  const pageWith = async (opts) => { const p = await (await b.newContext(own(opts))).newPage(); p.on('pageerror', e => pageErrors.push(e.message)); p.on('console', m => m.type() === 'error' && !/Failed to load resource: the server responded with a status of 4\d\d/.test(m.text()) && pageErrors.push('console: ' + m.text())); await p.goto(U); return p; };
+  const pick = async (p, code) => { await p.selectOption('#lang-select', code); await p.waitForFunction((c) => document.documentElement.lang === c, code); };
+  const lg = await page();
+  await step('English by default: <html lang="en">, a labelled picker listing every language in its own script, each option tagged with its language', async () => {
+    await lg.waitForSelector('.hk'); assert.equal(await lg.evaluate(() => document.documentElement.lang), 'en');
+    assert.equal((await lg.textContent('label.lang-pick span')).trim(), 'Language');
+    assert.equal(await lg.locator('label.lang-pick select#lang-select').count(), 1, 'the select is inside a label, so it has an accessible name');
+    const opts = await lg.$$eval('#lang-select option', os => os.map(o => [o.value, o.lang, o.textContent]));
+    assert.deepEqual(opts, [['en', 'en', 'English'], ['hi', 'hi', 'हिन्दी'], ['mr', 'mr', 'मराठी'], ['bn', 'bn', 'বাংলা'], ['ta', 'ta', 'தமிழ்'], ['te', 'te', 'తెలుగు'], ['kn', 'kn', 'ಕನ್ನಡ'], ['ml', 'ml', 'മലയാളം'], ['gu', 'gu', 'ગુજરાતી'], ['pa', 'pa', 'ਪੰਜਾਬੀ']]);
+  });
+  await step('switching to Hindi changes the page text at once, keeps what was typed, and stays on the same screen', async () => {
+    await lg.fill('#f-city', 'Pune'); await lg.selectOption('#f-service', 'Cooking'); await lg.waitForTimeout(400);
+    const namesBefore = await lg.locator('.hk h3').allTextContents();
+    await pick(lg, 'hi');
+    assert.equal((await lg.textContent('nav button.active')).trim(), hi['nav.find']);
+    assert.equal((await lg.textContent('#filters label:first-child span')).trim(), hi['filter.service']);
+    assert.equal(await lg.inputValue('#f-city'), 'Pune'); assert.equal(await lg.inputValue('#f-service'), 'Cooking'); // typed text and the chosen service survive; the value is still English
+    assert.equal((await lg.textContent('#f-service option[value=Cooking]')).trim(), hi['service.Cooking']);
+    assert.equal((await lg.textContent('#f-service option[value=""]')).trim(), hi['filter.any']);
+    assert.equal(await lg.getAttribute('#f-city', 'placeholder'), hi['filter.city_ph']);
+    assert.equal((await lg.title()), hi['app.title']);
+    assert.equal(await lg.evaluate(() => document.querySelector('label.lang-pick select').value), 'hi');
+    assert.deepEqual(await lg.locator('.hk h3').allTextContents(), namesBefore, 'names written by users are never translated');
+    await lg.fill('#f-city', ''); await lg.selectOption('#f-service', ''); await lg.waitForTimeout(400);
+  });
+  await step('the choice is remembered after a reload; <html lang> follows it', async () => {
+    await lg.reload(); await lg.waitForSelector('.hk');
+    assert.equal(await lg.evaluate(() => document.documentElement.lang), 'hi'); assert.equal(await lg.inputValue('#lang-select'), 'hi');
+    assert.equal(await lg.evaluate(() => localStorage.getItem('hs-lang')), 'hi');
+    assert.equal((await lg.textContent('nav button.active')).trim(), hi['nav.find']);
+  });
+  await step('Marathi: search by service still works, results show translated service names, availability and ₹ rates with normal digits', async () => {
+    await pick(lg, 'mr');
+    await lg.selectOption('#f-service', 'Cooking'); await lg.waitForTimeout(500);
+    const tags = await lg.locator('.hk .tag').allTextContents();
+    assert.ok(tags.length > 0 && tags.includes(mr['service.Cooking']), tags.join());
+    assert.ok(!tags.some(t => t === 'Cooking'), 'English service names should be translated');
+    assert.match(await lg.textContent('#count'), /^\d+ /); assert.ok((await lg.textContent('#count')).includes(mr['results.found'].other.replace('{n}', '').trim()) || (await lg.textContent('#count')).includes(mr['results.found'].one.replace('{n}', '').trim()));
+    for (const r of await lg.locator('.hk .rate').allTextContents()) assert.match(r.trim(), /^₹\d+\/तास$/);
+    assert.match(await lg.textContent('.hk .meta'), new RegExp(Object.values({ f: mr['avail.Full-time'], p: mr['avail.Part-time'], w: mr['avail.Weekends'] }).join('|')));
+    await lg.selectOption('#f-avail', 'Weekends'); await lg.waitForTimeout(500);
+    assert.deepEqual(await lg.locator('.hk h3').allTextContents(), []);   // nobody cooks on weekends in the seed: empty state in Marathi, not an error
+    assert.equal((await lg.textContent('#results')).trim(), mr['results.none']);
+    await lg.selectOption('#f-avail', ''); await lg.selectOption('#f-service', ''); await lg.waitForTimeout(400);
+  });
+  await step('forms keep their input and the signed-out state when the language changes', async () => {
+    await lg.click('#signin'); await lg.fill('#register-form [name=name]', 'राम <b>'); await lg.fill('#register-form [name=email]', 'ram@x.com');
+    await lg.selectOption('#register-form [name=role]', 'housekeeper');
+    await pick(lg, 'ta');
+    assert.equal(await lg.inputValue('#register-form [name=name]'), 'राम <b>'); assert.equal(await lg.inputValue('#register-form [name=email]'), 'ram@x.com');
+    assert.equal(await lg.inputValue('#register-form [name=role]'), 'housekeeper');
+    assert.equal((await lg.textContent('#register-form h2')).trim(), ta['register.title']);
+    assert.equal((await lg.textContent('#register-form [name=role] option[value=housekeeper]')).trim(), ta['register.role.housekeeper']);
+    assert.ok(await lg.locator('#auth').isVisible());
+  });
+  await step('signed-in screens switch without signing out; request cards, status, plural counts and dates follow the language', async () => {
+    await pick(sk, 'hi');
+    assert.equal((await sk.textContent('#logout')).trim(), hi['auth.signout']); assert.ok(await sk.locator('#logout').isVisible());
+    await sk.click('[data-tab=requests]'); await sk.waitForSelector('.badge');
+    assert.equal((await sk.textContent('.badge.declined')).trim(), hi['status.declined']);
+    assert.equal((await sk.textContent('#req-title')).trim(), hi['req.title']);
+    assert.ok((await sk.textContent('#req-list h3')).includes(hi['req.sent']));
+    assert.ok(!/[०-९]/.test(await sk.textContent('#req-list')), 'dates and numbers keep Latin digits');
+    await pick(sk, 'en');
+    assert.equal((await sk.textContent('#logout')).trim(), 'Sign out'); assert.ok((await sk.textContent('.badge.declined')).trim() === 'declined');
+  });
+  await step('server errors appear in the chosen language (and in the server\'s own English when English is chosen)', async () => {
+    const o = await pageWith(); await pick(o, 'hi');
+    await o.click('#signin'); await o.fill('#login-form [name=email]', 'nobody@x.com'); await o.fill('#login-form [name=password]', 'wrong-password'); await o.click('#login-form button[type=submit]');
+    await o.waitForSelector('.msg.err'); assert.equal((await o.textContent('.msg.err')).trim(), hi['err.wrong_credentials']);
+    await pick(o, 'en'); await o.click('#login-form button[type=submit]'); await o.waitForFunction(() => document.querySelector('.msg.err')?.textContent === 'wrong email or password');
+    await o.close();
+  });
+  await step('the confirmation email is sent in the language that was selected when signing up', async () => {
+    const o = await pageWith(); await pick(o, 'mr');
+    await register(o, 'seeker', 'Maya', 'maya-mr@x.com');
+    await o.waitForSelector('#msg:not([hidden])');
+    const log = fs.readFileSync(LOG, 'utf8'); const block = log.split('[mail] ').find(x => x.startsWith('to=maya-mr@x.com'));
+    assert.ok(block.startsWith('to=maya-mr@x.com lang=mr subject=' + mr['email.verify.subject']), block.slice(0, 120));
+    assert.match(block, /नमस्कार Maya,/); assert.match(block, /verify\.html\?token=/);
+    assert.equal((await o.textContent('#msg')).trim(), mr['register.welcome']);
+    await o.close();
+  });
+  await step('a first visit follows the browser language when supported, otherwise English', async () => {
+    for (const [locale, want] of [['ta-IN', 'ta'], ['hi', 'hi'], ['pa-IN', 'pa'], ['fr-FR', 'en'], ['pa-PK', 'en']]) {
+      const p = await pageWith({ locale }); await p.waitForSelector('.hk');
+      assert.equal(await p.evaluate(() => document.documentElement.lang), want, locale); assert.equal(await p.inputValue('#lang-select'), want, locale);
+      assert.equal(await p.evaluate(() => localStorage.getItem('hs-lang')), null, 'detecting the language does not store a choice'); await p.close();
+    }
+  });
+  await step('broken storage does not break the page', async () => {
+    const p = await (await b.newContext(own({ locale: 'en-US' }))).newPage();
+    await p.addInitScript(() => { Object.defineProperty(window, 'localStorage', { get() { throw new Error('blocked'); } }); });
+    p.on('pageerror', e => pageErrors.push(e.message)); await p.goto(U); await p.waitForSelector('.hk'); await pick(p, 'gu');
+    assert.equal((await p.textContent('nav button.active')).trim(), L('gu')['nav.find']); await p.close();
+  });
+  await step('verify and reset pages follow the saved language and have a picker too', async () => {
+    const ctx = await b.newContext(own({ locale: 'en-US' })); await ctx.addInitScript(() => { try { if (!localStorage.getItem('hs-lang')) localStorage.setItem('hs-lang', 'bn'); } catch {} });
+    const p = await ctx.newPage(); p.on('pageerror', e => pageErrors.push(e.message));
+    await p.goto(U + '/verify.html'); await p.waitForFunction(() => document.documentElement.lang === 'bn');
+    assert.equal((await p.textContent('#status')).trim(), L('bn')['verifypage.no_token']); assert.equal(await p.title(), L('bn')['verifypage.title']);
+    await pick(p, 'kn'); assert.equal((await p.textContent('#status')).trim(), L('kn')['verifypage.no_token']);
+    await p.goto(U + '/reset.html'); await p.waitForFunction(() => document.documentElement.lang === 'kn');
+    assert.equal((await p.textContent('#msg')).trim(), L('kn')['reset.no_token']); assert.equal((await p.textContent('#reset-form h2')).trim(), L('kn')['reset.heading']);
+    await p.close();
+  });
+  await step('the emailed-link page shows a translated server error and a translated "next" sentence with a real link', async () => {
+    const ctx = await b.newContext(own({ locale: 'en-US' })); await ctx.addInitScript(() => { try { localStorage.setItem('hs-lang', 'hi'); } catch {} });
+    const p = await ctx.newPage(); p.on('pageerror', e => pageErrors.push(e.message));
+    await p.goto(U + '/verify.html?token=bogus'); await p.waitForSelector('#status.err');
+    assert.equal((await p.textContent('#status')).trim(), hi['err.verify_link_invalid']);
+    assert.equal(await p.locator('#next a[href="/"]').count(), 1); assert.ok((await p.textContent('#next')).startsWith(hi['verifypage.next_fail'].split('{link}')[0]));
+    await p.close();
+  });
+  await step('long scripts fit a 360px phone: nothing overflows sideways, no button or field text is cut off (Malayalam, Tamil)', async () => {
+    const overflow = (p) => p.evaluate(() => {
+      const bad = [];
+      if (document.documentElement.scrollWidth > window.innerWidth) bad.push('page scrolls sideways: ' + document.documentElement.scrollWidth);
+      for (const el of document.querySelectorAll('button, .tag, .badge, label, h1, h2, h3, legend, .msg, select')) {
+        if (el.offsetParent === null) continue;
+        if (el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== 'visible') bad.push(el.tagName + ' ' + (el.textContent || '').trim().slice(0, 30));
+        const r = el.getBoundingClientRect(); if (r.right > window.innerWidth + 1 || r.left < -1) bad.push('outside viewport: ' + el.tagName + ' ' + (el.textContent || '').trim().slice(0, 30));
+      }
+      return bad;
+    });
+    for (const code of ['ml', 'ta']) {
+      const ctx = await b.newContext(own({ viewport: { width: 360, height: 740 }, locale: 'en-US' })); await ctx.addInitScript((c) => { try { localStorage.setItem('hs-lang', c); } catch {} }, code);
+      const p = await ctx.newPage(); p.on('pageerror', e => pageErrors.push(e.message)); await p.goto(U); await p.waitForSelector('.hk');
+      assert.deepEqual(await overflow(p), [], code + ' find');
+      await p.click('#signin'); assert.deepEqual(await overflow(p), [], code + ' sign in / create account');
+      await p.click('#forgot'); assert.deepEqual(await overflow(p), [], code + ' forgot');
+      await login(p, 'ravi@example.com', 'demo-pass-123'); await p.waitForSelector('#logout');
+      for (const tabName of ['profile', 'requests', 'account', 'find']) { await p.click(`[data-tab=${tabName}]`); await p.waitForTimeout(300); assert.deepEqual(await overflow(p), [], `${code} ${tabName}`); }
+      await p.click('#results button[data-hk]'); await p.waitForSelector('#dlg[open]'); assert.deepEqual(await overflow(p), [], code + ' request dialog');
+      assert.ok((await p.evaluate(() => getComputedStyle(document.body).lineHeight)) !== 'normal'); assert.ok(parseFloat(await p.evaluate(() => getComputedStyle(document.body).lineHeight)) >= 16 * 1.7 - 0.5, 'Indic scripts get a taller line');
+      await p.screenshot({ path: process.env.E2E_SHOTS ? `${process.env.E2E_SHOTS}/web-${code}-360.png` : '/dev/null', fullPage: false }).catch(() => {});
+      await ctx.close();
+    }
+  });
+
+  console.log('\n13. Health');
   await step('no browser errors', async () => assert.deepEqual(pageErrors, []));
   await step('server log has no errors or stack traces', async () => {
     const log = fs.readFileSync(LOG, 'utf8'); assert.ok(!/internal error|TypeError|Error:|at .*\.js:\d+/.test(log), log.split('\n').filter(l => /rror/.test(l)).slice(0, 3).join(' | '));

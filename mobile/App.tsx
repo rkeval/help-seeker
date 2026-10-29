@@ -1,6 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Alert, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { api, loadToken } from "./src/api";
 import AccountScreen from "./src/screens/AccountScreen";
@@ -8,19 +8,22 @@ import AuthScreen from "./src/screens/AuthScreen";
 import FindScreen from "./src/screens/FindScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
 import RequestsScreen from "./src/screens/RequestsScreen";
+import { I18nProvider, core, useI18n } from "./src/i18n";
+import { tr } from "./src/i18n";
 import type { Meta, Profile, User } from "./src/types";
-import { Button, Loading, useTheme } from "./src/ui";
+import { Button, LanguagePicker, Loading, useTheme } from "./src/ui";
 
 type Tab = "find" | "profile" | "requests" | "account" | "auth";
 
 export default function App() {
-  return <SafeAreaProvider><Main /></SafeAreaProvider>;
+  return <SafeAreaProvider><I18nProvider><Main /></I18nProvider></SafeAreaProvider>;
 }
 
 // Shown while the app first contacts the server. On the free hosting plan the server sleeps when idle, so the very
 // first start can take up to a minute: say so instead of leaving a bare spinner.
 function StartingUp() {
   const t = useTheme();
+  const { t: tx } = useI18n();
   const [slow, setSlow] = useState(false);
   useEffect(() => {
     const id = setTimeout(() => setSlow(true), 5000);
@@ -31,7 +34,7 @@ function StartingUp() {
       <Loading />
       {slow && (
         <Text style={{ color: t.muted, textAlign: "center" }}>
-          Waking up the server… the first start can take up to a minute.
+          {tx("net.waking")}
         </Text>
       )}
     </SafeAreaView>
@@ -40,6 +43,8 @@ function StartingUp() {
 
 function Main() {
   const t = useTheme();
+  const { t: tx, lang } = useI18n();
+  const [langOpen, setLangOpen] = useState(false);
   const [ready, setReady] = useState(false);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -62,7 +67,7 @@ function Main() {
         const [m] = await Promise.all([api.meta(), refresh()]);
         setMeta(m);
       } catch (e) {
-        Alert.alert("Can't reach the server", (e as Error).message);
+        Alert.alert(tr("net.cant_reach_title"), (e as Error).message);
       } finally {
         setReady(true);
       }
@@ -88,18 +93,18 @@ function Main() {
   const resendVerification = async () => {
     try {
       await api.resendVerification();
-      Alert.alert("Email sent", `We sent a new confirmation link to ${user?.email}. Check your inbox and spam folder.`);
+      Alert.alert(tx("verify.sent_title"), tx("verify.sent", { email: user?.email ?? "" }));
     } catch (e) {
-      Alert.alert("Couldn't send", (e as Error).message);
+      Alert.alert(tx("common.send_failed"), (e as Error).message);
     }
   };
   const recheckVerification = async () => {
     try {
       const me = await refresh();
-      if (me.user?.emailVerified) Alert.alert("Thanks!", "Your email is confirmed.");
-      else Alert.alert("Not confirmed yet", "Open the link in the email we sent you, then tap this again.");
+      if (me.user?.emailVerified) Alert.alert(tx("verify.confirmed_title"), tx("verify.confirmed"));
+      else Alert.alert(tx("verify.not_yet_title"), tx("verify.not_yet"));
     } catch (e) {
-      Alert.alert("Couldn't check", (e as Error).message);
+      Alert.alert(tx("verify.check_failed"), (e as Error).message);
     }
   };
 
@@ -107,34 +112,49 @@ function Main() {
   if (!meta) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: t.bg, padding: 24, justifyContent: "center", gap: 12 }}>
-        <Text style={{ color: t.fg, textAlign: "center" }}>Couldn't connect to Help Seeker.</Text>
-        <Button title="Try again" onPress={() => { setReady(false); api.meta().then(setMeta).then(refresh).finally(() => setReady(true)); }} />
+        <Text style={{ color: t.fg, textAlign: "center" }}>{tx("net.cant_connect")}</Text>
+        <Button title={tx("common.try_again")} onPress={() => { setReady(false); api.meta().then(setMeta).then(refresh).finally(() => setReady(true)); }} />
       </SafeAreaView>
     );
   }
 
-  const tabs: [Tab, string][] = [["find", "Find"]];
-  if (user) tabs.push(["profile", profile ? "Profile" : "Offer services"]);
-  if (user) tabs.push(["requests", unread ? `Requests (${unread})` : "Requests"], ["account", "Account"]);
+  const tabs: [Tab, string][] = [["find", tx("tab.find")]];
+  if (user) tabs.push(["profile", profile ? tx("tab.profile") : tx("tab.offer")]);
+  if (user) tabs.push(["requests", unread ? tx("tab.requests_new", { n: unread }) : tx("tab.requests")], ["account", tx("tab.account")]);
+  const current = core.LANGS.find((l) => l.code === lang);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
       <StatusBar style="auto" />
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingTop: 8 }}>
-        <Text style={{ color: t.fg, fontSize: 20, fontWeight: "700" }}>Help Seeker</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", columnGap: 12, paddingHorizontal: 16, paddingTop: 8 }}>
+        <Text style={{ color: t.fg, fontSize: 20, fontWeight: "700", lineHeight: 28 }}>{tx("app.name")}</Text>
+        <Pressable onPress={() => setLangOpen(true)} accessibilityRole="button" accessibilityLabel={`${tx("lang.label")}: ${current?.name}`} accessibilityLanguage={lang}
+          hitSlop={8} style={{ minHeight: 44, justifyContent: "center" }}>
+          <Text style={{ color: t.accent, lineHeight: 22 }}>{current?.name} ▾</Text>
+        </Pressable>
         {user
-          ? <Pressable onPress={signOut}><Text style={{ color: t.accent }}>Sign out ({user.name})</Text></Pressable>
-          : <Pressable onPress={() => setTab("auth")}><Text style={{ color: t.accent }}>Sign in</Text></Pressable>}
+          ? <Pressable onPress={signOut} hitSlop={8} style={{ minHeight: 44, justifyContent: "center", flexShrink: 1 }}><Text style={{ color: t.accent, lineHeight: 22 }}>{tx("auth.signout_name", { name: user.name })}</Text></Pressable>
+          : <Pressable onPress={() => setTab("auth")} hitSlop={8} style={{ minHeight: 44, justifyContent: "center" }}><Text style={{ color: t.accent, lineHeight: 22 }}>{tx("auth.signin")}</Text></Pressable>}
       </View>
+      {langOpen && (
+        <Modal animationType="fade" transparent onRequestClose={() => setLangOpen(false)}>
+          <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }} onPress={() => setLangOpen(false)}>
+            <Pressable style={{ backgroundColor: t.card, borderRadius: 14, padding: 16, gap: 12 }} onPress={() => {}}>
+              <ScrollView><LanguagePicker /></ScrollView>
+              <Button title={tx("common.close")} kind="ghost" onPress={() => setLangOpen(false)} />
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
 
       {user && !user.emailVerified && (
         <View style={{ margin: 12, padding: 12, gap: 8, borderRadius: 12, borderWidth: 1, borderColor: t.accent, backgroundColor: t.card }}>
           <Text style={{ color: t.fg }}>
-            {`Confirm your email (${user.email}) to contact housekeepers and answer requests.`}
+            {tx("verify.banner", { email: user.email })}
           </Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
-            <View style={{ flex: 1 }}><Button title="Resend email" onPress={resendVerification} /></View>
-            <View style={{ flex: 1 }}><Button kind="ghost" title="I've confirmed" onPress={recheckVerification} /></View>
+            <View style={{ flex: 1 }}><Button title={tx("verify.resend")} onPress={resendVerification} /></View>
+            <View style={{ flex: 1 }}><Button kind="ghost" title={tx("verify.recheck")} onPress={recheckVerification} /></View>
           </View>
         </View>
       )}
@@ -151,8 +171,8 @@ function Main() {
 
       <View style={{ flexDirection: "row", borderTopWidth: 1, borderColor: t.line, backgroundColor: t.card }}>
         {tabs.map(([id, label]) => (
-          <Pressable key={id} onPress={() => setTab(id)} accessibilityRole="tab" style={{ flex: 1, padding: 14, alignItems: "center" }}>
-            <Text style={{ color: tab === id ? t.accent : t.muted, fontWeight: tab === id ? "700" : "400" }}>{label}</Text>
+          <Pressable key={id} onPress={() => setTab(id)} accessibilityRole="tab" style={{ flex: 1, paddingHorizontal: 4, paddingVertical: 12, minHeight: 48, alignItems: "center", justifyContent: "center" }}>
+            <Text style={{ color: tab === id ? t.accent : t.muted, fontWeight: tab === id ? "700" : "400", textAlign: "center", fontSize: 14, lineHeight: 20 }}>{label}</Text>
           </Pressable>
         ))}
       </View>
