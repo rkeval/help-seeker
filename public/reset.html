@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Choose a new password – Help Seeker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><h1>Help Seeker</h1></header>
+  <main>
+    <p id="msg" class="msg" role="status" hidden></p>
+    <form id="reset-form" class="card stack">
+      <h2>Choose a new password</h2>
+      <label>New password (8+ characters) <input name="password" type="password" minlength="8" autocomplete="new-password" required></label>
+      <button type="submit">Save new password</button>
+    </form>
+    <p id="done" hidden>Your password has been changed and you've been signed out everywhere. <a href="/">Go to sign in</a>. If you use the mobile app, just open it and sign in.</p>
+  </main>
+  <script>
+    const token = new URLSearchParams(location.search).get("token") || "";
+    const msg = document.getElementById("msg");
+    const form = document.getElementById("reset-form");
+    if (!token) { msg.textContent = "This reset link is missing its token. Request a new one."; msg.className = "msg err"; msg.hidden = false; form.hidden = true; }
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      msg.hidden = true;
+      const res = await fetch("/api/password-reset/confirm", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, password: form.elements.password.value }),
+      });
+      if (res.ok) { form.hidden = true; document.getElementById("done").hidden = false; history.replaceState(null, "", "/reset.html"); return; }
+      const data = await res.json().catch(() => ({}));
+      msg.textContent = data.error || "Something went wrong."; msg.className = "msg err"; msg.hidden = false;
+    });
+  </script>
+</body>
+</html>
