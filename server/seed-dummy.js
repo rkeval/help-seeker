@@ -1,6 +1,7 @@
 // Bigger set of obviously fake data for trying the app: housekeepers in Pusad, a few households,
 // and requests, reviews and messages in every state. Safe to re-run. Every email ends in @dummy.test and every
 // password is "demo-pass-123". Not part of `npm run seed` (the e2e tests rely on that one staying small).
+// `--remove` deletes it again (only accounts ending in @dummy.test).
 // Refuses to run against a production-looking setup unless ALLOW_DUMMY_DATA=1, so it can't litter the live site.
 const { loadEnvFiles } = require("./env");
 loadEnvFiles(require("node:path").join(__dirname, ".."));
@@ -38,6 +39,11 @@ const requests = [
   if (/onrender|neon\.tech/.test(process.env.DATABASE_URL || "") && process.env.ALLOW_DUMMY_DATA !== "1")
     throw new Error("DATABASE_URL looks like production. Set ALLOW_DUMMY_DATA=1 only if you really want fake people on the live site.");
   const db = await openDb(process.env.DATABASE_URL, { migrationUrl: process.env.DATABASE_URL_UNPOOLED });
+  if (process.argv.includes("--remove")) { // deleting the users cascades to their profiles, requests, reviews and messages
+    const r = await db.query("DELETE FROM users WHERE email LIKE '%@dummy.test'");
+    console.log(`Removed ${r.rowCount} dummy accounts (and everything attached to them).`);
+    await db.close(); return;
+  }
   const mk = async (name, email, role) => {
     const have = await db.one("SELECT id FROM users WHERE email = $1", [email]);
     if (have) return { id: have.id, fresh: false };
