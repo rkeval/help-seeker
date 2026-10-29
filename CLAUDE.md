@@ -23,6 +23,12 @@ The owner decides *what the product does*; engineering decisions are made by the
 Local Postgres in the cloud container: `pg_ctlcluster 16 main start`; role `hs` / password `hs` with `CREATEDB`; database `hs_test`. If missing:
 `su postgres -c "psql -c \"CREATE ROLE hs LOGIN PASSWORD 'hs' CREATEDB\" -c 'CREATE DATABASE hs_test OWNER hs'"`.
 
+## CI/CD
+- `.github/workflows/ci.yml`: jobs `api`, `mobile`, `e2e` (website, real browser) run on every PR and push; job `deploy` runs only for pushes to `main`, after all three are green: Render deploy hook → `scripts/wait-for-deploy.js` (waits for `/healthz` to report the merged commit; `RENDER_GIT_COMMIT`) → `scripts/smoke.js` (read-only checks of production).
+- Deploy needs the repo secret `RENDER_DEPLOY_HOOK_URL` and variable `APP_URL`; when they're missing the deploy step skips with a notice (it must never fail the build for that reason). Never print the hook URL.
+- A merge to `main` IS a production deploy once those are set: only merge green PRs, and if the deploy job goes red after a merge, treat it as an incident (check the Render deploy, fix forward or revert).
+- `/healthz` must keep returning `{ok, commit}`; the pipeline depends on it.
+
 ## Neon
 - `neon.ts` declares the Neon services; `.neon` links this folder to the Neon project (org/project ids, no secrets). `neon deploy` / `neon env pull` write `.env.local` (git-ignored, holds passwords): never print, commit or paste its contents.
 - App traffic uses the pooled `DATABASE_URL`; only the startup schema step uses the direct `DATABASE_URL_UNPOOLED` (`openDb(url, { migrationUrl })`). Keep `pg` (node-postgres): the server is a long-running Node process, which is what Neon's guidance prescribes.

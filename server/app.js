@@ -389,9 +389,11 @@ async function createApp({
 
   route("GET", "/api/meta", async () => ({ services: SERVICES, availability: AVAIL }));
 
+  // `commit` lets the deploy pipeline check that the new version is the one actually serving traffic
+  // (Render sets RENDER_GIT_COMMIT for every deploy; set GIT_COMMIT yourself on other hosts).
   route("GET", "/healthz", async () => {
     await db.one("SELECT 1");
-    return { ok: true };
+    return { ok: true, commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || null };
   });
 
   // ---- dispatch ----

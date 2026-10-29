@@ -50,6 +50,26 @@ Without `TEST_DATABASE_URL` the tests are skipped.
 2. **Server (Render)**: push this repo to GitHub, create a Render *Blueprint* from it (uses [`render.yaml`](render.yaml)), and fill in `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `APP_URL` (your `https://….onrender.com` address) and optionally `RESEND_API_KEY`.
 3. Point the mobile app at the same URL (`EXPO_PUBLIC_API_URL`).
 
+### Continuous deployment (GitHub Actions → Render)
+Every push to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+1. **Checks (in parallel):** API tests on a real Postgres, mobile typecheck + bundle, and the real-browser website regression (`e2e/run.sh web`, production mode).
+2. **Deploy**, only if every check is green and only for `main` (never for pull requests): triggers Render's deploy hook.
+3. **Wait until live:** polls `/healthz` until the site reports the exact commit that was just merged (a newer commit that includes it also counts). If the new version never starts, the job fails after 20 minutes and Render keeps serving the previous version.
+4. **Smoke test** ([`scripts/smoke.js`](scripts/smoke.js)): read-only checks on the live site (pages, health, search never exposes phone numbers or emails, private endpoints refuse anonymous visitors). It creates no accounts and writes nothing.
+
+**One-time setup** (needs your own accounts; until it's done the deploy job simply skips with a notice and the build stays green):
+1. Create the Render service from this repo's Blueprint ([`render.yaml`](render.yaml)), as described above. `autoDeployTrigger: "off"` is set so Render doesn't also deploy on every push.
+2. In Render open the service, **Settings → Deploy Hook**, and copy the URL. Treat it like a password.
+3. In GitHub open **Settings → Secrets and variables → Actions** and add:
+   - a repository **secret** `RENDER_DEPLOY_HOOK_URL` = that URL;
+   - a repository **variable** `APP_URL` = your site's address, e.g. `https://help-seeker.onrender.com` (no trailing slash).
+4. Optional: **Settings → Environments → production → Required reviewers** makes every deploy wait for a click.
+
+You can also deploy any time from **Actions → CI → Re-run**. **Rolling back:** revert the commit on `main` (the pipeline redeploys), or redeploy an earlier deploy from the Render dashboard.
+
+Notes: the live-commit check reads `RENDER_GIT_COMMIT`, which Render sets automatically; on another host set `GIT_COMMIT` yourself. The pipeline deploys the website and API only. The mobile apps go out through the app stores (EAS), not this pipeline. Schema changes apply by themselves at startup. Render also offers a built-in "After CI Checks Pass" auto-deploy if you'd rather not use the hook; this pipeline adds the live-commit check and the smoke test on top.
+
 ### Neon CLI (`neon.ts`)
 The repo is linked to a Neon project (`.neon`) and declares its services in [`neon.ts`](neon.ts) (Postgres, plus the beta *Realtime* preview). With the [Neon CLI](https://neon.com/docs/cli) (`npm i -g neon@latest`) signed in (`neon login`):
 ```sh
