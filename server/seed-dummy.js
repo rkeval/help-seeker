@@ -1,4 +1,4 @@
-// Bigger set of obviously fake data for trying the app: housekeepers in several cities, a few households,
+// Bigger set of obviously fake data for trying the app: housekeepers in Pusad, a few households,
 // and requests, reviews and messages in every state. Safe to re-run. Every email ends in @dummy.test and every
 // password is "demo-pass-123". Not part of `npm run seed` (the e2e tests rely on that one staying small).
 // Refuses to run against a production-looking setup unless ALLOW_DUMMY_DATA=1, so it can't litter the live site.
@@ -8,18 +8,18 @@ const { openDb } = require("./db");
 const auth = require("./auth");
 
 const hk = [
-  ["Lakshmi Nair", "Kochi", 110, 7, "Full-time", ["Cooking", "Cleaning"], "Kerala home cooking and tidy kitchens."],
-  ["Fatima Khan", "Hyderabad", 160, 4, "Part-time", ["Cleaning", "Laundry", "Ironing"], "Careful with delicate fabrics."],
-  ["Ramesh Yadav", "Delhi", 180, 9, "Full-time", ["Cooking", "Grocery shopping"], "Plans weekly menus and does the shopping."],
-  ["Priya Singh", "Bengaluru", 210, 6, "Weekends", ["Child care", "Cleaning"], "First-aid trained, great with toddlers."],
-  ["Joseph D'Souza", "Goa", 140, 12, "Full-time", ["Cooking", "Elder care"], "Patient caregiver and Goan cook."],
-  ["Meena Kumari", "Jaipur", 100, 2, "Part-time", ["Dishwashing", "Cleaning"], "Quick and thorough."],
-  ["Kavita Joshi", "Mumbai", 230, 8, "Part-time", ["Cleaning", "Laundry"], "Deep cleaning for flats."],
-  ["Suresh Babu", "Chennai", 130, 5, "Weekends", ["Cooking", "Dishwashing"], "South Indian meals for parties."],
-  ["Nisha Verma", "Pune", 125, 3, "Part-time", ["Child care", "Dishwashing"], "Reliable after-school care."],
-  ["Imran Sheikh", "Kolkata", 150, 6, "Full-time", ["Cleaning", "Grocery shopping", "Ironing"], "Organised and punctual."],
-  ["Geeta Rao", "Bengaluru", 170, 10, "Full-time", ["Elder care", "Cooking"], "Ten years caring for seniors."],
-  ["Tara Menon", "Kochi", 115, 1, "Weekends", ["Cleaning"], "New to the platform, eager to please."],
+  ["Lakshmi Nair", "Pusad", 110, 7, "Full-time", ["Cooking", "Cleaning"], "Kerala home cooking and tidy kitchens."],
+  ["Fatima Khan", "Pusad", 160, 4, "Part-time", ["Cleaning", "Laundry", "Ironing"], "Careful with delicate fabrics."],
+  ["Ramesh Yadav", "Pusad", 180, 9, "Full-time", ["Cooking", "Grocery shopping"], "Plans weekly menus and does the shopping."],
+  ["Priya Singh", "Pusad", 210, 6, "Weekends", ["Child care", "Cleaning"], "First-aid trained, great with toddlers."],
+  ["Joseph D'Souza", "Pusad", 140, 12, "Full-time", ["Cooking", "Elder care"], "Patient caregiver and Goan cook."],
+  ["Meena Kumari", "Pusad", 100, 2, "Part-time", ["Dishwashing", "Cleaning"], "Quick and thorough."],
+  ["Kavita Joshi", "Pusad", 230, 8, "Part-time", ["Cleaning", "Laundry"], "Deep cleaning for flats."],
+  ["Suresh Babu", "Pusad", 130, 5, "Weekends", ["Cooking", "Dishwashing"], "South Indian meals for parties."],
+  ["Nisha Verma", "Pusad", 125, 3, "Part-time", ["Child care", "Dishwashing"], "Reliable after-school care."],
+  ["Imran Sheikh", "Pusad", 150, 6, "Full-time", ["Cleaning", "Grocery shopping", "Ironing"], "Organised and punctual."],
+  ["Geeta Rao", "Pusad", 170, 10, "Full-time", ["Elder care", "Cooking"], "Ten years caring for seniors."],
+  ["Tara Menon", "Pusad", 115, 1, "Weekends", ["Cleaning"], "New to the platform, eager to please."],
 ].map(([name, city, rate, exp, avail, services, bio], i) => ({ name, email: `${name.split(/\W+/)[0].toLowerCase()}${i}@dummy.test`, city, rate, exp, avail, services, bio, phone: `+91 97000 ${String(10000 + i * 111).slice(0, 5)}` }));
 const households = [["Aarav Mehta", "aarav@dummy.test", "+91 96000 00001"], ["Sara Thomas", "sara@dummy.test", "+91 96000 00002"], ["Rohan Das", "rohan@dummy.test", "+91 96000 00003"]];
 
