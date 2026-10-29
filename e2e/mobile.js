@@ -108,6 +108,23 @@ const tokenFor = (email) => {
     await tom.reload(); await tom.waitForSelector('text=Sign out (Tom Baker)'); await tapText(tom, 'Requests');
     await tom.waitForSelector('text=accepted'); assert.ok(await tom.getByText('Call +91 90000 55555').isVisible());
   });
+  console.log('\nMessages between Tom and Mia');
+  await step('Tom opens the chat, sends a message containing HTML, and it shows as plain text', async () => {
+    await tom.getByText(/^Messages/).first().click(); await tom.waitForSelector('text=Chat with Mia Fernandes'); await tom.waitForSelector('text=No messages yet');
+    await tom.getByPlaceholder('Write a message…').fill('Hi Mia, <b>Monday</b> at 9?'); await tapText(tom, 'Send');
+    await tom.waitForSelector('text=Hi Mia, <b>Monday</b> at 9?'); assert.equal(await tom.locator('b').count(), 0);
+  });
+  await step('Mia\'s Requests tab shows (1) from the background refresh; she opens the chat, reads and replies', async () => {
+    await mia.waitForSelector('text=Requests (1)', { timeout: 35000 });
+    await mia.getByText(/^Messages/).first().click(); await mia.waitForSelector('text=Chat with Tom Baker');
+    await mia.waitForSelector('text=Hi Mia, <b>Monday</b> at 9?'); await mia.getByPlaceholder('Write a message…').fill('Monday 9am is fine!'); await tapText(mia, 'Send');
+    await mia.waitForSelector('text=Monday 9am is fine!');
+  });
+  await step('Tom\'s open chat shows Mia\'s reply by itself; closing clears the unread count on both sides', async () => {
+    await tom.waitForSelector('text=Monday 9am is fine!', { timeout: 12000 });
+    await tapText(tom, 'Close'); await tapText(mia, 'Close');
+    await mia.waitForFunction(() => !document.body.innerText.includes('Requests (1)'), null, { timeout: 8000 });
+  });
   await step('Tom rates Mia 5★; the rating shows in search', async () => {
     await tapText(tom, '5★'); await tom.waitForSelector('text=You rated this'); await tapText(tom, 'Find');
     await tom.waitForSelector('text=Mia Fernandes'); assert.ok(await tom.getByText(/★ 5 \(1\)/).isVisible());

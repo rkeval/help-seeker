@@ -139,6 +139,36 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await hk.click('button[data-act=accepted]'); await hk.waitForSelector('.badge.accepted');
     await sk.click('[data-tab=find]'); await sk.click('[data-tab=requests]'); await sk.waitForSelector('text=+91 90000 12345');
   });
+  console.log('\n6b. Messages between Sam and Hema');
+  await step('Sam opens the chat (empty) and sends a message that contains HTML', async () => {
+    await sk.click('[data-tab=requests]'); await sk.click('button[data-chat]'); await sk.waitForSelector('#chat-dlg[open]');
+    await sk.waitForSelector('#chat-log .empty'); assert.match(await sk.textContent('#chat-log'), /No messages yet/); assert.match(await sk.textContent('#chat-title'), /Chat with Hema/);
+    await sk.fill('#chat-form [name=body]', 'Hi Hema! <b>Monday</b> works? <img src=x onerror="window.pwned2=1">');
+    await sk.click('#chat-form button[type=submit]'); await sk.waitForSelector('#chat-log .bubble.mine');
+    assert.equal(await sk.locator('#chat-log b, #chat-log img').count(), 0, 'message HTML must be shown as text');
+    assert.ok((await sk.textContent('#chat-log')).includes('<b>Monday</b>'));
+  });
+  await step('Hema\'s Requests tab shows "1 new" through the real background refresh (no reload)', async () => {
+    await hk.waitForSelector('nav button:has-text("(1 new)")', { timeout: 35000 });
+  });
+  await step('Hema opens it: sees the text (not HTML), the badge clears, she replies', async () => {
+    await hk.click('[data-tab=requests]'); await hk.waitForSelector('button[data-chat]:has-text("1 new")'); await hk.click('button[data-chat]');
+    await hk.waitForSelector('#chat-log .bubble:not(.mine)');
+    assert.ok((await hk.textContent('#chat-log')).includes('<b>Monday</b>')); assert.equal(await hk.locator('#chat-log b, #chat-log img').count(), 0);
+    assert.equal(await hk.evaluate(() => window.pwned2), undefined);
+    await hk.waitForFunction(() => !document.querySelector('nav').innerText.includes('new'), null, { timeout: 8000 });
+    await hk.fill('#chat-form [name=body]', 'Yes, Monday 9am works.\nSee you then!'); await hk.click('#chat-form button[type=submit]'); await hk.waitForSelector('#chat-log .bubble.mine');
+  });
+  await step('Sam\'s open chat picks up the reply on its own (multi-line kept)', async () => {
+    await sk.waitForSelector('#chat-log .bubble:not(.mine)', { timeout: 12000 });
+    assert.match(await sk.textContent('#chat-log .bubble:not(.mine)'), /Monday 9am works\.\s*See you then!/);
+    assert.equal(await sk.locator('#chat-log .bubble').count(), 2);
+  });
+  await step('closing the chats leaves no unread anywhere', async () => {
+    await hk.click('#chat-close'); await sk.click('#chat-close');
+    await sk.waitForFunction(() => !document.querySelector('nav').innerText.includes('new')); await sk.click('[data-tab=requests]');
+    assert.equal(await sk.locator('button[data-chat]:has-text("new")').count(), 0);
+  });
   await step('Sam reviews 5 stars once; rating shows on the search card', async () => {
     await sk.selectOption('#req-list select', '5'); await sk.click('button[data-review]'); await sk.waitForSelector('text=You rated this');
     await sk.click('[data-tab=find]'); await sk.selectOption('#f-service', ''); await sk.fill('#f-city', 'Goa'); await sk.waitForTimeout(500);
@@ -155,6 +185,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await login(rv, 'ravi@example.com', 'demo-pass-123'); await rv.click('[data-tab=requests]'); await rv.waitForSelector('button[data-act=declined]');
     await rv.click('button[data-act=declined]'); await rv.waitForSelector('.badge.declined');
     await sk.click('[data-tab=requests]'); await sk.waitForSelector('.badge.declined'); assert.ok(!(await sk.textContent('#req-list')).includes('98000 44444'));
+  });
+  await step('only the accepted request offers Messages (the declined one does not)', async () => {
+    await sk.click('[data-tab=requests]'); await sk.waitForSelector('.badge.declined'); assert.equal(await sk.locator('button[data-chat]').count(), 1);
   });
   await step('a housekeeper cannot send requests (no contact buttons shown)', async () => { await rv.click('[data-tab=find]'); await rv.waitForSelector('.hk'); assert.equal(await rv.locator('button[data-hk]').count(), 0); });
 

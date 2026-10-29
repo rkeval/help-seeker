@@ -27,6 +27,7 @@ Local Postgres in the cloud container: `pg_ctlcluster 16 main start`; role `hs` 
 - SQL is always parameterised (`$1…`). Ids from clients go through `toId` before reaching a query. Timestamps are `timestamptz`, serialised as ISO strings.
 - Anything that must hold under concurrency is enforced by the database (unique index, atomic `UPDATE … WHERE status = 'pending' RETURNING`), not by check-then-write.
 - Never leak phone numbers or emails in public responses; a housekeeper's phone is revealed only after they accept a request.
+- Messaging lives inside an accepted request. Non-participants get `404` (never `403`) so ids can't be probed; messages are rendered as text only (web: text nodes, mobile: `<Text>`), never as HTML. Reading a conversation marks only the *other* person's messages read.
 - Gated actions return `403` with `code: "email_not_verified"` for unconfirmed accounts.
 - Web UI escapes all user text (`esc()`); mobile renders text via React Native (no HTML).
 - New behaviour needs a test; a guard that protects security or data should be mutation-checked (break it on purpose, see the test fail, restore).

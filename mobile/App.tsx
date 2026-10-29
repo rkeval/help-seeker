@@ -24,11 +24,13 @@ function Main() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tab, setTab] = useState<Tab>("find");
+  const [unread, setUnread] = useState(0);
 
   const refresh = useCallback(async () => {
     const me = await api.me();
     setUser(me.user);
     setProfile(me.profile);
+    setUnread(me.unreadMessages ?? 0);
     return me;
   }, []);
 
@@ -45,6 +47,13 @@ function Main() {
       }
     })();
   }, [refresh]);
+
+  // keep the unread-messages count on the Requests tab fresh while signed in
+  useEffect(() => {
+    if (!user) return;
+    const id = setInterval(() => { void refresh().catch(() => {}); }, 20000);
+    return () => clearInterval(id);
+  }, [user, refresh]);
 
   const signedIn = async () => {
     const me = await refresh();
@@ -85,7 +94,7 @@ function Main() {
 
   const tabs: [Tab, string][] = [["find", "Find"]];
   if (user?.role === "housekeeper") tabs.push(["profile", "Profile"]);
-  if (user) tabs.push(["requests", "Requests"], ["account", "Account"]);
+  if (user) tabs.push(["requests", unread ? `Requests (${unread})` : "Requests"], ["account", "Account"]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
@@ -118,7 +127,7 @@ function Main() {
         {tab === "account" && user && (
           <AccountScreen user={user} onSignOut={signOut} onDeleted={() => { setUser(null); setProfile(null); setTab("find"); }} />
         )}
-        {tab === "requests" && user && <RequestsScreen key={user.id} user={user} />}
+        {tab === "requests" && user && <RequestsScreen key={user.id} user={user} onUnreadChange={() => void refresh().catch(() => {})} />}
       </View>
 
       <View style={{ flexDirection: "row", borderTopWidth: 1, borderColor: t.line, backgroundColor: t.card }}>

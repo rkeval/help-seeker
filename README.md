@@ -8,6 +8,7 @@ Find a housekeeper (cleaning, dishwashing, cooking, laundry, elder care…). Web
 - A housekeeper's phone number is hidden until they **accept** your request; after that you can leave a 1–5★ review.
 - Public search never exposes phone numbers or emails.
 - New accounts must **confirm their email** (link valid 24 hours). Until then a user can sign in and browse, but households can't contact anyone, and housekeepers stay out of search results and can't answer requests. Completing a password reset also confirms the address.
+- **Messages:** once a housekeeper accepts a request, the household and the housekeeper can message each other inside it (plain text, up to 1,000 characters, 20 per minute per person). The Requests tab shows how many messages are new. New messages appear within a few seconds while a conversation is open; there are no push or email notifications yet.
 - Password reset by emailed link; users can permanently delete their account (profile, requests and reviews go with it).
 
 Mobile app: [`mobile/`](mobile/README.md) (Expo / React Native, same API).
@@ -56,12 +57,14 @@ Your data lives in the hosted Postgres, so it survives server restarts and redep
 | POST | `/api/email-verification/resend` | signed-in, max one email per minute |
 | POST | `/api/password-reset/request` `{email}`, `/api/password-reset/confirm` `{token, password}` | anyone |
 | POST | `/api/account/delete` `{password}` | signed-in |
-| GET | `/api/me`, `/api/meta`, `/api/housekeepers?service&city&maxRate&avail&sort`, `/healthz` | anyone |
+| GET | `/api/me` (includes `unreadMessages`), `/api/meta`, `/api/housekeepers?service&city&maxRate&avail&sort`, `/healthz` | anyone |
 | PUT | `/api/profile` | housekeeper (listed in search only once the email is confirmed) |
 | POST | `/api/requests` | household with a confirmed email |
 | GET | `/api/requests` | signed-in (own requests only) |
 | PATCH | `/api/requests/:id` `{status: accepted\|declined}` | housekeeper with a confirmed email |
 | POST | `/api/requests/:id/review` `{rating, comment}` | household |
+| GET | `/api/requests/:id/messages?after=<id>` | the two people in an *accepted* request (confirmed email). Marks the other person's messages read. Returns `{with, messages:[{id, mine, body, created_at}]}` |
+| POST | `/api/requests/:id/messages` `{body}` | same; 1–1000 characters, 20 per minute |
 
 ## Security notes
 Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie (web) or an `Authorization: Bearer` header (mobile, token returned only when the request sends `X-Client: mobile`); login/register/reset are rate-limited per IP (in memory, single process); confirmation and reset links are single-use (consumed atomically), stored hashed and expire (24 h / 1 h), expire after 1 hour and sign the user out everywhere; the reset endpoint answers identically whether or not the email exists; SQL is parameterised; the UI escapes all user text; races (duplicate requests, double answers, reused reset tokens) are settled by the database.
@@ -73,4 +76,4 @@ Day-to-day engineering is handled by the **`software-engineer` agent** (`.claude
 The `email_verified_at` column is added automatically, but accounts created before email verification existed start out *unconfirmed*: their housekeepers disappear from search until they confirm (or complete a password reset). If you already have real users, mark them confirmed once with `UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;`.
 
 ## Not yet done
-Phone verification, ID/background checks, in-app messaging, payments, database migrations tooling (tables are created with `IF NOT EXISTS`, so later schema changes need a migration step), and a shared rate limiter if you run several instances.
+Phone verification, ID/background checks, push/email notifications for messages, attachments, payments, database migrations tooling (tables are created with `IF NOT EXISTS`, so later schema changes need a migration step), and a shared rate limiter if you run several instances.
