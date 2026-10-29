@@ -235,9 +235,10 @@ async function pollChat() {
   if (r.messages.length) c.last = Math.max(c.last, ...r.messages.map((m) => m.id));
   addMessages(r.messages);
   if (!c.seen.size && !$("#chat-log .empty")) $("#chat-log").innerHTML = '<p class="empty muted">No messages yet. Say hello!</p>';
-  if (!c.first) $("#chat-log").scrollTop = $("#chat-log").scrollHeight; // jump to the latest message when opening
+  const firstLoad = !c.first;
+  if (firstLoad) $("#chat-log").scrollTop = $("#chat-log").scrollHeight; // jump to the latest message when opening
   c.first = true;
-  refreshBadge();
+  if (firstLoad || r.messages.length) refreshBadge(); // the unread count can only have changed if something happened
 }
 
 async function openChat(id, name) {

@@ -366,9 +366,14 @@ async function createApp({
     const after = toId(query.get("after")) || 0; // only newer messages, so polling stays cheap
     // Opening/polling a conversation counts as reading what the other person sent.
     await db.query("UPDATE messages SET read_at = now() WHERE request_id = $1 AND sender_id <> $2 AND read_at IS NULL", [c.id, user.id]);
-    const messages = await db.query(
-      "SELECT id, sender_id = $2 AS mine, body, created_at FROM messages WHERE request_id = $1 AND id > $3 ORDER BY id LIMIT 200",
-      [c.id, user.id, after]);
+    // Opening a conversation (no cursor) shows the *latest* 200 messages; later polls continue from the cursor.
+    const messages = after
+      ? await db.query(
+        "SELECT id, sender_id = $2 AS mine, body, created_at FROM messages WHERE request_id = $1 AND id > $3 ORDER BY id LIMIT 200",
+        [c.id, user.id, after])
+      : await db.query(
+        `SELECT * FROM (SELECT id, sender_id = $2 AS mine, body, created_at FROM messages WHERE request_id = $1 ORDER BY id DESC LIMIT 200) latest
+         ORDER BY id`, [c.id, user.id]);
     return { with: c.other_name, messages };
   }, { auth: true, verified: true });
 

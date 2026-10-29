@@ -639,3 +639,28 @@ test("messaging requires a confirmed email", async (t) => {
     assert.equal(r.body.code, "email_not_verified");
   }
 });
+
+test("messaging: opening a long conversation shows the latest 200 messages; polling continues from the cursor", async (t) => {
+  const { s, hk, db, msgs, reqId } = await chatSetup(t);
+  const sender = (await db.one("SELECT id FROM users WHERE email = 's@x.com'")).id;
+  await db.query("INSERT INTO messages (request_id, sender_id, body) SELECT $1, $2, 'm' || g FROM generate_series(1, 250) g", [reqId, sender]);
+
+  const open = (await s("GET", msgs)).body.messages;
+  assert.equal(open.length, 200);
+  assert.equal(open[0].body, "m51");     // the oldest 50 are not shown
+  assert.equal(open[199].body, "m250");  // ...but the newest are, in order
+  assert.deepEqual(open.map((m) => m.id), [...open.map((m) => m.id)].sort((a, b) => a - b));
+
+  const bodies = (r) => r.body.messages.map((m) => m.body);
+  const seq = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => `m${from + i}`);
+  // a cursor inside the shown window returns just what follows it
+  assert.deepEqual(bodies(await s("GET", `${msgs}?after=${open[149].id}`)), seq(201, 250));
+  // a cursor further back than the window pages forward 200 at a time, in order, skipping nothing
+  const m10 = (await db.one("SELECT id FROM messages WHERE request_id = $1 AND body = 'm10'", [reqId])).id;
+  const page1 = await s("GET", `${msgs}?after=${m10}`);
+  assert.deepEqual(bodies(page1), seq(11, 210));
+  assert.deepEqual(bodies(await s("GET", `${msgs}?after=${page1.body.messages[199].id}`)), seq(211, 250));
+  // and new messages keep arriving after the newest
+  await hk("POST", msgs, { body: "newest" });
+  assert.deepEqual(bodies(await s("GET", `${msgs}?after=${open[199].id}`)), ["newest"]);
+});
