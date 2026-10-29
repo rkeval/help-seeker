@@ -35,8 +35,20 @@ async function smoke(base, { fetchImpl = fetch, log = console.log } = {}) {
   await check("private endpoints refuse anonymous visitors", async () => {
     for (const p of ["/api/requests", "/api/requests/1/messages"]) expect((await get(p)).status === 401, `${p} did not return 401`);
   });
-  await check("unknown paths and path traversal return 404", async () => {
-    for (const p of ["/api/nope", "/..%2f..%2fpackage.json", "/server/app.js"]) expect((await get(p)).status === 404, `${p} did not return 404`);
+  await check("unknown paths return 404 and nothing outside the website folder can be fetched", async () => {
+    for (const p of ["/api/nope", "/server/app.js", "/package.json", "/.env"]) {
+      const r = await get(p); expect(r.status === 404, `${p} returned ${r.status}, expected 404`);
+    }
+    // A proxy in front of the app (Render's edge) may answer a path-traversal attempt itself with a 400, 403 or a
+    // redirect before the app ever sees it, so the status isn't fixed. What must hold: no file contents come back
+    // and nothing is a server error. The status is logged so surprises are visible.
+    for (const p of ["/..%2f..%2fpackage.json", "/%2e%2e/%2e%2e/package.json", "/..%2f..%2fserver%2fapp.js"]) {
+      const r = await get(p);
+      const body = r.status === 200 ? await r.text() : "";
+      log(`       (${p} -> ${r.status})`);
+      expect(!/"name":\s*"help-seeker"|createApp|require\(/.test(body), `${p} returned file contents`);
+      expect(r.status < 500, `${p} returned ${r.status}`);
+    }
   });
   await check("sign-in refuses unknown credentials (writes nothing)", async () => {
     const r = await get("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "smoke@invalid.example", password: "not-a-real-password" }) });

@@ -92,6 +92,38 @@ test("smoke: fails when the site leaks private fields, is broken, or is unreacha
     assert.equal(r.ok, false); assert.equal(r.total - r.passed, 1); // exactly the privacy check fails
   } finally { await leaky.close(); }
 
+  // a file leaking through a traversal path must fail the smoke test, whatever the status code is
+  const leakyFile = await serve((req, res) => {
+    if (req.url.includes("..")) { res.writeHead(200); return res.end('{ "name": "help-seeker", "dependencies": {} }'); }
+    const send = (code, body) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(typeof body === "string" ? body : JSON.stringify(body)); };
+    if (req.url === "/healthz") return send(200, { ok: true });
+    if (req.url === "/") { res.writeHead(200); return res.end("<h1>Help Seeker</h1>"); }
+    if (req.url === "/api/meta") return send(200, { services: ["Cleaning"] });
+    if (req.url === "/api/housekeepers") return send(200, []);
+    if (req.url.startsWith("/api/requests")) return send(401, {});
+    if (req.url === "/api/login") return send(401, {});
+    if (["/verify.html", "/reset.html", "/app.js", "/style.css"].includes(req.url)) { res.writeHead(200); return res.end("x"); }
+    return send(404, {});
+  });
+  try { const r = await smoke(leakyFile.base, { log: quiet }); assert.equal(r.ok, false); assert.equal(r.total - r.passed, 1); } finally { await leakyFile.close(); }
+
+  // ...but a proxy that rejects traversal attempts itself (400) or redirects them (308) is fine
+  for (const status of [400, 403, 308]) {
+    const edge = await serve((req, res) => {
+      if (req.url.includes("..") || req.url.includes("%2e")) { res.writeHead(status, status === 308 ? { Location: "/" } : {}); return res.end(); }
+      const send = (code, body) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(typeof body === "string" ? body : JSON.stringify(body)); };
+      if (req.url === "/healthz") return send(200, { ok: true });
+      if (req.url === "/") { res.writeHead(200); return res.end("<h1>Help Seeker</h1>"); }
+      if (req.url === "/api/meta") return send(200, { services: ["Cleaning"] });
+      if (req.url === "/api/housekeepers") return send(200, []);
+      if (req.url.startsWith("/api/requests")) return send(401, {});
+      if (req.url === "/api/login") return send(401, {});
+      if (["/verify.html", "/reset.html", "/app.js", "/style.css"].includes(req.url)) { res.writeHead(200); return res.end("x"); }
+      return send(404, {});
+    });
+    try { const r = await smoke(edge.base, { log: quiet }); assert.equal(r.ok, true, `edge answering ${status} to traversal should pass`); } finally { await edge.close(); }
+  }
+
   const broken = await serve((req, res) => { res.writeHead(500); res.end("boom"); });
   try { assert.equal((await smoke(broken.base, { log: quiet })).ok, false); } finally { await broken.close(); }
 
