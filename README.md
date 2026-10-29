@@ -66,6 +66,9 @@ Your data lives in the hosted Postgres, so it survives server restarts and redep
 ## Security notes
 Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie (web) or an `Authorization: Bearer` header (mobile, token returned only when the request sends `X-Client: mobile`); login/register/reset are rate-limited per IP (in memory, single process); confirmation and reset links are single-use (consumed atomically), stored hashed and expire (24 h / 1 h), expire after 1 hour and sign the user out everywhere; the reset endpoint answers identically whether or not the email exists; SQL is parameterised; the UI escapes all user text; races (duplicate requests, double answers, reused reset tokens) are settled by the database.
 
+## Working on this project
+Day-to-day engineering is handled by the **`software-engineer` agent** (`.claude/agents/software-engineer.md`) following the `software-engineering` skill and `CLAUDE.md`. The owner describes the functionality they want; the agent designs, builds, tests (API tests + a full browser regression, `e2e/run.sh`), opens the pull request, fixes CI and, once everything is green, merges it. It only comes back with a question when a decision is genuinely the owner's (a product choice it can't infer, an account or key only the owner has, anything that could destroy real data or weaken security). Use `/agents` in Claude Code to see it, or ask for work in plain language.
+
 ## Upgrading an existing database
 The `email_verified_at` column is added automatically, but accounts created before email verification existed start out *unconfirmed*: their housekeepers disappear from search until they confirm (or complete a password reset). If you already have real users, mark them confirmed once with `UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;`.
 
