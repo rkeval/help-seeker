@@ -67,13 +67,14 @@ const MESSAGES_PER_MINUTE = 20;
 
 async function createApp({
   databaseUrl = process.env.DATABASE_URL,
+  migrationUrl = process.env.DATABASE_URL_UNPOOLED,
   schema,
   secureCookies = false,
   appUrl = "http://localhost:3000",
   trustProxy = false,
   sendMail = createMailer(),
 } = {}) {
-  const db = await openDb(databaseUrl, { schema });
+  const db = await openDb(databaseUrl, { schema, migrationUrl });
   const limitAuth = makeLimiter(20, 15 * 60 * 1000);
 
   // Behind a hosting proxy every connection comes from the proxy, so use the address it appended to X-Forwarded-For.

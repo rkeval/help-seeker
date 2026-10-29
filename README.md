@@ -17,8 +17,7 @@ Mobile app: [`mobile/`](mobile/README.md) (Expo / React Native, same API).
 Requires Node 18+ and a Postgres database (local, or a free hosted one – see below).
 
 ```sh
-cp .env.example .env            # then edit DATABASE_URL; load it however you like, e.g.:
-export $(grep -v '^#' .env | xargs)
+cp .env.example .env            # then edit DATABASE_URL (the server loads .env.local and .env itself)
 npm install
 npm run seed                    # optional demo housekeepers (password: demo-pass-123)
 npm start                       # http://localhost:3000
@@ -34,7 +33,8 @@ Without `TEST_DATABASE_URL` the tests are skipped.
 ## Configuration
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | **Required.** Postgres connection string |
+| `DATABASE_URL` | **Required.** Postgres connection string (on Neon: the pooled one) |
+| `DATABASE_URL_UNPOOLED` | Optional direct (non-pooled) connection string, used only for the startup schema step |
 | `PORT` | default 3000 |
 | `APP_URL` | public base URL, used in password-reset links |
 | `NODE_ENV=production` | marks cookies `Secure`; serve behind HTTPS |
@@ -43,9 +43,21 @@ Without `TEST_DATABASE_URL` the tests are skipped.
 | `DB_POOL_MAX` | max Postgres connections, default 10 (keep it small on free database plans) |
 
 ## Free hosting: Neon (database) + Render (server)
-1. **Database** – create a free project at [neon.tech](https://neon.tech) and copy its connection string. Use `sslmode=verify-full` in it (e.g. `postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=verify-full`). Supabase's free Postgres works the same way.
-2. **Server** – push this repo to GitHub, create a Render *Blueprint* from it (uses [`render.yaml`](render.yaml)), and fill in `DATABASE_URL`, `APP_URL` (your `https://….onrender.com` address) and optionally `RESEND_API_KEY`.
+1. **Database (Neon)**: create a project at [neon.com](https://neon.com) and copy its connection strings from the **Connect** panel (or run `neon env pull`, see below). Use two settings:
+   - `DATABASE_URL`: the **pooled** string (host contains `-pooler`). All normal app traffic uses it; Neon recommends pooled for web apps.
+   - `DATABASE_URL_UNPOOLED`: the **direct** string (same host without `-pooler`). Optional but recommended: the app uses it only for the schema step at startup, because Neon recommends direct connections for schema changes. If unset, the pooled URL is used for everything.
+   Neon's strings end in `?sslmode=require&channel_binding=require`; both work as pasted. (Our database driver ignores `channel_binding`, and treats `sslmode=require` as full certificate verification with a warning. Writing `sslmode=verify-full` silences the warning and keeps strict checking if the driver is upgraded.)
+2. **Server (Render)**: push this repo to GitHub, create a Render *Blueprint* from it (uses [`render.yaml`](render.yaml)), and fill in `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `APP_URL` (your `https://….onrender.com` address) and optionally `RESEND_API_KEY`.
 3. Point the mobile app at the same URL (`EXPO_PUBLIC_API_URL`).
+
+### Neon CLI (`neon.ts`)
+The repo is linked to a Neon project (`.neon`) and declares its services in [`neon.ts`](neon.ts) (Postgres, plus the beta *Realtime* preview). With the [Neon CLI](https://neon.com/docs/cli) (`npm i -g neon@latest`) signed in (`neon login`):
+```sh
+neon config plan     # preview what neon.ts would change
+neon deploy          # provision the services declared in neon.ts
+neon env pull --service postgres --service realtime   # writes .env.local (git-ignored): DATABASE_URL, DATABASE_URL_UNPOOLED, NEON_REALTIME_URL, NEON_REALTIME_SECRET
+```
+The server reads `.env.local` and `.env` itself at startup (real environment variables always win), so `npm start` works straight after `neon env pull`. **Never commit `.env.local`**; it holds database passwords. The Realtime variables are not used by the app yet.
 
 Your data lives in the hosted Postgres, so it survives server restarts and redeploys. Free tiers have limits (storage, idle sleep, cold starts of tens of seconds on the server, databases that pause when unused) and providers change them, so check their current terms before you rely on them for real users. Any other host that runs Node plus any Postgres works too.
 

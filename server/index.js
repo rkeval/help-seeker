@@ -1,3 +1,8 @@
+const { loadEnvFiles } = require("./env");
+
+// `neon deploy` / `neon env pull` write .env.local (DATABASE_URL, DATABASE_URL_UNPOOLED, …); real env vars take priority.
+loadEnvFiles(require("node:path").join(__dirname, ".."));
+
 const { createApp } = require("./app");
 
 const port = Number(process.env.PORT) || 3000;
@@ -8,6 +13,7 @@ if (process.env.NODE_ENV === "production" && !process.env.RESEND_API_KEY) {
 
 createApp({
   databaseUrl: process.env.DATABASE_URL,
+  migrationUrl: process.env.DATABASE_URL_UNPOOLED,
   appUrl: process.env.APP_URL || `http://localhost:${port}`,
   secureCookies: process.env.NODE_ENV === "production",
   trustProxy: process.env.TRUST_PROXY === "1",

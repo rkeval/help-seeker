@@ -1,4 +1,6 @@
 // Adds demo housekeepers (password for all: "demo-pass-123"). Safe to re-run.
+const { loadEnvFiles } = require("./env");
+loadEnvFiles(require("node:path").join(__dirname, ".."));
 const { openDb } = require("./db");
 const auth = require("./auth");
 
@@ -10,7 +12,7 @@ const demo = [
 ];
 
 (async () => {
-  const db = await openDb(process.env.DATABASE_URL);
+  const db = await openDb(process.env.DATABASE_URL, { migrationUrl: process.env.DATABASE_URL_UNPOOLED });
   for (const [name, email, city, phone, rate, exp, avail, services, bio] of demo) {
     if (await db.one("SELECT 1 FROM users WHERE email = $1", [email])) continue;
     const u = await db.one("INSERT INTO users (email,name,role,pass_hash,email_verified_at) VALUES ($1,$2,'housekeeper',$3,now()) RETURNING id",

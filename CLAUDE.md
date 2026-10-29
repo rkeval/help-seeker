@@ -23,6 +23,11 @@ The owner decides *what the product does*; engineering decisions are made by the
 Local Postgres in the cloud container: `pg_ctlcluster 16 main start`; role `hs` / password `hs` with `CREATEDB`; database `hs_test`. If missing:
 `su postgres -c "psql -c \"CREATE ROLE hs LOGIN PASSWORD 'hs' CREATEDB\" -c 'CREATE DATABASE hs_test OWNER hs'"`.
 
+## Neon
+- `neon.ts` declares the Neon services; `.neon` links this folder to the Neon project (org/project ids, no secrets). `neon deploy` / `neon env pull` write `.env.local` (git-ignored, holds passwords): never print, commit or paste its contents.
+- App traffic uses the pooled `DATABASE_URL`; only the startup schema step uses the direct `DATABASE_URL_UNPOOLED` (`openDb(url, { migrationUrl })`). Keep `pg` (node-postgres): the server is a long-running Node process, which is what Neon's guidance prescribes.
+- Neon's hosts are not reachable from the cloud sandbox unless the environment's network access allows them (HTTPS to `api.neon.tech`/`console.neon.tech` for the CLI, and raw Postgres connections to `*.neon.tech`).
+
 ## Conventions
 - SQL is always parameterised (`$1…`). Ids from clients go through `toId` before reaching a query. Timestamps are `timestamptz`, serialised as ISO strings.
 - Anything that must hold under concurrency is enforced by the database (unique index, atomic `UPDATE … WHERE status = 'pending' RETURNING`), not by check-then-write.
