@@ -20,6 +20,7 @@ Requires Node 18+ and a Postgres database (local, or a free hosted one – see b
 cp .env.example .env            # then edit DATABASE_URL (the server loads .env.local and .env itself)
 npm install
 npm run seed                    # optional demo housekeepers (password: demo-pass-123)
+npm run seed:dummy              # optional bigger fake data set (12 housekeepers, 3 households, requests, reviews); refuses a live database
 npm start                       # http://localhost:3000
 ```
 Tables are created automatically on startup.

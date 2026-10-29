@@ -66,3 +66,20 @@ dbTest("database: a broken migration URL fails startup loudly instead of being i
 test("database: a missing DATABASE_URL gives a clear error", async () => {
   await assert.rejects(() => openDb(undefined), /DATABASE_URL is not set/);
 });
+
+test("dummy data: seeds housekeepers, households, requests and reviews, can be re-run, and refuses production-looking URLs", { skip: !URL_ }, async () => {
+  const { spawnSync } = require("node:child_process");
+  const { Pool } = require("pg");
+  const schema = "dummy_" + Math.random().toString(36).slice(2, 8);
+  const admin = new Pool({ connectionString: URL_ });
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  try {
+    const u = new URL(URL_); u.searchParams.set("options", `-c search_path=${schema}`);
+    const run = (url) => spawnSync(process.execPath, [path.join(__dirname, "..", "server", "seed-dummy.js")], { env: { ...process.env, DATABASE_URL: url, DATABASE_URL_UNPOOLED: "" }, encoding: "utf8" });
+    for (let i = 0; i < 2; i++) assert.equal(run(u.toString()).status, 0);
+    const n = async (t) => Number((await admin.query(`SELECT count(*) FROM ${schema}.${t}`)).rows[0].count);
+    assert.deepEqual([await n("profiles"), await n("users"), await n("requests"), await n("reviews")], [12, 15, 7, 4]);
+    const bad = run("postgres://u:p@ep-x.ap-southeast-1.aws.neon.tech/neondb");
+    assert.notEqual(bad.status, 0); assert.match(bad.stderr, /looks like production/);
+  } finally { await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
+});

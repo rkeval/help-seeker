@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node server/index.js",
     "seed": "node server/seed.js",
+    "seed:dummy": "node server/seed-dummy.js",
     "build": "node scripts/build.js",
     "test": "node --test test/*.test.js"
   },
