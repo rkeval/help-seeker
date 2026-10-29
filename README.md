@@ -47,7 +47,7 @@ Without `TEST_DATABASE_URL` the tests are skipped.
    - `DATABASE_URL`: the **pooled** string (host contains `-pooler`). All normal app traffic uses it; Neon recommends pooled for web apps.
    - `DATABASE_URL_UNPOOLED`: the **direct** string (same host without `-pooler`). Optional but recommended: the app uses it only for the schema step at startup, because Neon recommends direct connections for schema changes. If unset, the pooled URL is used for everything.
    Neon's strings end in `?sslmode=require&channel_binding=require`; both work as pasted. (Our database driver ignores `channel_binding`, and treats `sslmode=require` as full certificate verification with a warning. Writing `sslmode=verify-full` silences the warning and keeps strict checking if the driver is upgraded.)
-2. **Server (Render)**: push this repo to GitHub, create a Render *Blueprint* from it (uses [`render.yaml`](render.yaml)), and fill in `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `APP_URL` (your `https://….onrender.com` address) and optionally `RESEND_API_KEY`.
+2. **Server (Render)**: push this repo to GitHub, create a Render *Blueprint* from it (`render.yaml` pins the region to Singapore to sit next to a Neon database in `ap-southeast-1`; if your Neon project is elsewhere, change `region` **before** creating the service, because it can't be changed afterwards) (uses [`render.yaml`](render.yaml)), and fill in `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, `APP_URL` (your `https://….onrender.com` address) and optionally `RESEND_API_KEY`.
 3. Point the mobile app at the same URL (`EXPO_PUBLIC_API_URL`).
 
 ### Continuous deployment (GitHub Actions → Render)

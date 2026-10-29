@@ -5,6 +5,9 @@ services:
     name: help-seeker
     runtime: node
     plan: free
+    # Keep the server in the same region as the Neon database (ap-southeast-1 = Singapore): every request makes
+    # database queries, and a region can't be changed after the service is created.
+    region: singapore
     buildCommand: npm install --omit=dev
     startCommand: npm start
     healthCheckPath: /healthz
