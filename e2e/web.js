@@ -255,19 +255,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const ow = await page();
   await register(ow, 'seeker', 'Olive Owner', 'owner@x.com');
   await step('the owner sees no sample-data card until the email is confirmed', async () => {
-    await ow.click('[data-tab=account]'); await ow.waitForSelector('#delete-form:visible'); assert.ok(await ow.locator('#admin-card').isHidden());
+    await ow.click('[data-tab=account]'); await ow.waitForSelector('#delete-form:visible'); assert.equal(await ow.locator('#admin-card').count(), 0);
   });
   await step('after confirming, the card appears; one click adds 12 sample housekeepers that only the owner sees', async () => {
     await confirmEmail('owner@x.com'); await ow.reload(); await ow.click('[data-tab=account]'); await ow.waitForSelector('#admin-card:visible');
-    await anon.reload(); await anon.waitForSelector('.hk'); const before = await count(anon); await ow.click('#sample-add'); await ow.waitForSelector('.msg:has-text("Sample data added")');
+    await anon.reload(); await anon.waitForSelector('.hk'); const before = await count(anon); await ow.click('button[data-sample=add]'); await ow.waitForSelector('.msg:has-text("Sample data added")');
     await ow.waitForSelector('#sample-status:has-text("12 sample housekeepers")');
     await ow.click('[data-tab=find]'); await ow.waitForSelector('.hk .tag:has-text("sample")'); assert.equal(await ow.locator('.hk .tag:has-text("sample")').count(), 12);
     await anon.reload(); await anon.waitForSelector('.hk'); assert.equal(await count(anon), before);
     await sk.click('[data-tab=find]'); await sk.fill('#f-city', 'Pusad'); await sk.waitForSelector('#count:has-text("0 housekeepers")');
   });
   await step('other signed-in people never see the card, and one click removes the sample data again', async () => {
-    await sk.click('[data-tab=account]'); await sk.waitForSelector('#delete-form:visible'); assert.ok(await sk.locator('#admin-card').isHidden());
-    await ow.click('[data-tab=account]'); await ow.click('#sample-remove'); await ow.waitForSelector('.msg:has-text("Sample data removed")');
+    await sk.click('[data-tab=account]'); await sk.waitForSelector('#delete-form:visible'); assert.equal(await sk.locator('#admin-card').count(), 0); assert.ok(!(await sk.content()).includes('Add sample data'));
+    await ow.click('[data-tab=account]'); await ow.click('button[data-sample=remove]'); await ow.waitForSelector('.msg:has-text("Sample data removed")');
     await ow.click('[data-tab=find]'); await ow.fill('#f-city', 'Pusad'); await ow.waitForSelector('#count:has-text("0 housekeepers")');
   });
 
