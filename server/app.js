@@ -200,7 +200,9 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
   // ---- dispatch ----
   async function handleApi(req, res, url) {
     const cookies = auth.parseCookies(req.headers.cookie);
-    let token = cookies.sid;
+    const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization || "");
+    const mobile = req.headers["x-client"] === "mobile";
+    let token = bearer ? bearer[1] : cookies.sid;
     let cookieOut;
     const setToken = (t) => { token = t; cookieOut = auth.sessionCookie(t, secureCookies); };
     const user = auth.userFromToken(db, token);
@@ -218,7 +220,10 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
 
     const body = ["POST", "PUT", "PATCH"].includes(req.method) ? await readJson(req) : {};
     const out = await matched.handler({ user, body, params, query: url.searchParams, token, setToken, ip: req.socket.remoteAddress });
-    const [status, payload] = Array.isArray(out) && typeof out[0] === "number" ? out : [200, out];
+    let [status, payload] = Array.isArray(out) && typeof out[0] === "number" ? out : [200, out];
+    // Native apps can't rely on cookies: hand them the session token in the body. Browsers never get it
+    // in JS-readable form (a cross-site page can't set X-Client without a CORS preflight, which we don't allow).
+    if (mobile && cookieOut && token) payload = { ...payload, token };
     const headers = { "Content-Type": "application/json", "Cache-Control": "no-store" };
     if (cookieOut) headers["Set-Cookie"] = cookieOut;
     res.writeHead(status, headers);

@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Help Seeker",
+    "slug": "help-seeker",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "supportsTablet": false, "bundleIdentifier": "com.helpseeker.app" },
+    "android": { "package": "com.helpseeker.app" },
+    "plugins": ["expo-secure-store"]
+  }
+}

@@ -124,3 +124,26 @@ test("input hardening", async (t) => {
   assert.equal(res.status, 404);
   assert.equal((await c("GET", "/")).status, 200);
 });
+
+test("mobile clients authenticate with a bearer token, browsers never get one", async (t) => {
+  const { server } = await start();
+  t.after(() => server.close());
+  const base = `http://localhost:${server.address().port}`;
+  const post = (path, body, headers = {}) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+  const creds = { email: "m@x.com", name: "Mo", password: "password123", role: "seeker" };
+
+  let res = await post("/api/register", creds);
+  assert.equal((await res.json()).token, undefined); // plain browser: cookie only
+
+  res = await post("/api/login", creds, { "X-Client": "mobile" });
+  const { token } = await res.json();
+  assert.ok(token);
+
+  res = await fetch(base + "/api/me", { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal((await res.json()).user.email, "m@x.com");
+
+  res = await post("/api/logout", {}, { Authorization: `Bearer ${token}` });
+  assert.equal(res.status, 200);
+  res = await fetch(base + "/api/me", { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal((await res.json()).user, null);
+});

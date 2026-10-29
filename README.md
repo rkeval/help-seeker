@@ -19,6 +19,9 @@ npm test
 
 Environment: `PORT` (default 3000), `DB_FILE` (default `data/app.db`), `NODE_ENV=production` (marks cookies `Secure`; serve behind HTTPS).
 
+## Mobile app
+Android and iPhone app in [`mobile/`](mobile/README.md) (Expo / React Native) using the same API.
+
 ## API (JSON; state-changing requests need `Content-Type: application/json`)
 | Method | Path | Who |
 |---|---|---|
@@ -31,7 +34,7 @@ Environment: `PORT` (default 3000), `DB_FILE` (default `data/app.db`), `NODE_ENV
 | POST | `/api/requests/:id/review` `{rating, comment}` | household |
 
 ## Security notes
-Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie; login/register are rate-limited per IP (in memory, single process); SQL is parameterised; the UI escapes all user text.
+Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie (web) or an `Authorization: Bearer` header (mobile, token returned only when the request sends `X-Client: mobile`); login/register are rate-limited per IP (in memory, single process); SQL is parameterised; the UI escapes all user text.
 
 ## Not yet done
-Email/phone verification, password reset, ID/background checks, in-app messaging, payments, and a shared rate limiter if you run several instances.
+Account deletion (required by the app stores), email/phone verification, password reset, ID/background checks, in-app messaging, payments, and a shared rate limiter if you run several instances.
