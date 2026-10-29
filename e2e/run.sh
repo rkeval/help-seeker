@@ -41,7 +41,7 @@ if [ "$WHAT" = web ] || [ "$WHAT" = all ]; then
   DBS+=(hs_e2e_web); URL="$(new_db hs_e2e_web)" || exit 1
   (cd "$ROOT" && DATABASE_URL="$URL" node server/seed.js >/dev/null)
   # `exec` makes the subshell *become* node, so $! is the real server PID and cleanup can kill it
-  (cd "$ROOT" && exec env DATABASE_URL="$(pooled "$URL")" DATABASE_URL_UNPOOLED="$URL" NODE_ENV=production TRUST_PROXY=1 PORT=3120 APP_URL=http://localhost:3120 node server/index.js >"$WORK/web.log" 2>&1) & PIDS+=("$!")
+  (cd "$ROOT" && exec env DATABASE_URL="$(pooled "$URL")" DATABASE_URL_UNPOOLED="$URL" NODE_ENV=production TRUST_PROXY=1 ADMIN_EMAIL=owner@x.com PORT=3120 APP_URL=http://localhost:3120 node server/index.js >"$WORK/web.log" 2>&1) & PIDS+=("$!")
   wait_up http://localhost:3120 "$WORK/web.log" || exit 1
   (cd "$WORK" && E2E_URL=http://localhost:3120 E2E_LOG="$WORK/web.log" node "$ROOT/e2e/web.js") || status=1
 fi

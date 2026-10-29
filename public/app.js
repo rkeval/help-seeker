@@ -57,7 +57,32 @@ async function show(next) {
   if (tab === "find") await loadResults();
   if (tab === "requests") await loadRequests();
   if (tab === "profile") fillProfile();
+  if (tab === "account") renderAdmin();
 }
+
+// ---------- owner-only sample data ----------
+// The card is built here and only for the owner, so it isn't even in the page for anybody else (the server also refuses them).
+function renderAdmin() {
+  $("#admin-card")?.remove();
+  if (!me.isAdmin) return;
+  const card = document.createElement("div");
+  card.id = "admin-card"; card.className = "card stack";
+  card.innerHTML = `<h2>Sample data <span class="tag">only you can see this</span></h2>
+    <p>Fake housekeepers in Pusad so the site doesn't look empty while you try it. Only you see them; nobody else can find or contact them.</p>
+    <p class="muted" id="sample-status"></p>
+    <div class="actions"><button type="button" data-sample="add">Add sample data</button><button type="button" class="ghost" data-sample="remove">Remove sample data</button></div>`;
+  card.querySelector("#sample-status").textContent = me.sampleHousekeepers ? `${me.sampleHousekeepers} sample housekeepers are on the site (visible only to you).` : "No sample data right now.";
+  $("#account").prepend(card);
+}
+$("#account").addEventListener("click", (e) => {
+  const action = e.target.closest("button[data-sample]")?.dataset.sample;
+  if (!action) return; // other clicks (like the delete form) must be left alone
+  guard(async () => {
+    await api("POST", "/api/admin/sample-data", { action });
+    await refreshMe(); renderAdmin();
+    flash(action === "add" ? "Sample data added. Only you can see it." : "Sample data removed.");
+  })(e);
+});
 
 async function refreshMe() {
   me = await api("GET", "/api/me");
@@ -121,7 +146,7 @@ async function loadResults() {
   $("#count").textContent = `${list.length} housekeeper${list.length === 1 ? "" : "s"} found`;
   $("#results").innerHTML = list.map((h) => `
     <article class="card hk">
-      <h3>${esc(h.name)}</h3>
+      <h3>${esc(h.name)}${h.sample ? ` <span class="tag">sample</span>` : ""}</h3>
       <div class="meta">${esc(h.city)} · ${esc(h.avail)} · ${h.exp} yrs · ${h.rating ? `★ ${h.rating} (${h.reviews})` : "No reviews yet"}</div>
       <div>${h.services.map((s) => `<span class="tag">${esc(s)}</span>`).join("")}</div>
       <p>${esc(h.bio)}</p>

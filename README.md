@@ -20,7 +20,7 @@ Requires Node 18+ and a Postgres database (local, or a free hosted one – see b
 cp .env.example .env            # then edit DATABASE_URL (the server loads .env.local and .env itself)
 npm install
 npm run seed                    # optional demo housekeepers (password: demo-pass-123)
-npm run seed:dummy              # optional bigger fake data set (12 housekeepers, 3 households, requests, reviews); refuses a live database
+npm run seed:dummy              # optional bigger fake data set (12 housekeepers in Pusad, 3 households, requests, reviews); refuses a live database (use the owner-only Account-tab buttons there)
 npm start                       # http://localhost:3000
 ```
 Tables are created automatically on startup.
@@ -40,6 +40,7 @@ Without `TEST_DATABASE_URL` the tests are skipped.
 | `APP_URL` | public base URL, used in password-reset links |
 | `NODE_ENV=production` | marks cookies `Secure`; serve behind HTTPS |
 | `TRUST_PROXY=1` | behind a hosting proxy: use the client IP from `X-Forwarded-For` for rate limiting. Don't set it if the server is directly exposed. |
+| `ADMIN_EMAIL` | optional. The owner is `OWNER_EMAIL` in `server/app.js` unless this overrides it (empty = nobody). Whoever signs in with that email **and has confirmed it** gets a "Sample data" card on the Account tab (one click adds or removes fake housekeepers that only they can see). |
 | `RESEND_API_KEY`, `MAIL_FROM` | send confirmation and reset emails through [Resend](https://resend.com) (free tier). Without a key, emails are printed to the server log, so in production nobody can confirm their email. Resend's default test sender (`onboarding@resend.dev`) only delivers to your own account's address: to email real users, verify a domain with Resend and set `MAIL_FROM` to an address on it (check Resend's current docs for details). |
 | `DB_POOL_MAX` | max Postgres connections, default 10 (keep it small on free database plans) |
 

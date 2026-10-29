@@ -2,6 +2,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const auth = require("./auth");
+const dummy = require("./dummy");
 const { openDb } = require("./db");
 const { createMailer } = require("./mail");
 const crypto = require("node:crypto");
@@ -60,6 +61,9 @@ function makeLimiter(max, windowMs) {
   };
 }
 
+// The owner of this site. Only an account with this address *and a confirmed email* gets the owner-only tools. No setting
+// is needed on the host; ADMIN_EMAIL (even empty = nobody) overrides it.
+const OWNER_EMAIL = "r.keval@gmail.com";
 const RESET_TTL_MS = 60 * 60 * 1000;
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -72,10 +76,14 @@ async function createApp({
   secureCookies = false,
   appUrl = "http://localhost:3000",
   trustProxy = false,
+  adminEmail = process.env.ADMIN_EMAIL ?? OWNER_EMAIL,
   sendMail = createMailer(),
 } = {}) {
   const db = await openDb(databaseUrl, { schema, migrationUrl });
   const limitAuth = makeLimiter(20, 15 * 60 * 1000);
+  // The owner is whoever signs in with ADMIN_EMAIL *and* has confirmed that address (an unconfirmed account could belong to
+  // anyone who typed the owner's email). Nothing about the admin is visible to anybody else.
+  const isAdmin = (user) => !!(adminEmail && user && user.emailVerified && user.email.toLowerCase() === adminEmail.trim().toLowerCase());
 
   // Behind a hosting proxy every connection comes from the proxy, so use the address it appended to X-Forwarded-For.
   const clientIp = (req) => {
@@ -117,6 +125,7 @@ async function createApp({
     const name = str(body.name, 100, { required: true, label: "name" });
     const password = typeof body.password === "string" ? body.password : "";
     if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters");
+    if (dummy.isDummyEmail(email)) throw bad("invalid email"); // reserved for the owner's sample data
     if (!["seeker", "housekeeper", "both"].includes(body.role)) throw bad("role must be seeker, housekeeper or both");
     // `role` only records what the person said they wanted at sign-up. It decides nothing: anyone can hire, and
     // anyone can add a housekeeper profile. "both" is stored as "housekeeper" (they set up a profile first).
@@ -231,13 +240,17 @@ async function createApp({
     const unread = await db.one(
       `SELECT COUNT(*)::int AS n FROM messages m JOIN requests r ON r.id = m.request_id
        WHERE m.read_at IS NULL AND m.sender_id <> $1 AND (r.seeker_id = $1 OR r.hk_id = $1)`, [user.id]);
-    return { user, profile, unreadMessages: unread.n };
+    const me = { user, profile, unreadMessages: unread.n };
+    if (isAdmin(user)) { me.isAdmin = true; me.sampleHousekeepers = await dummy.countDummy(db); }
+    return me;
   });
 
   // ---- housekeepers ----
   route("GET", "/api/housekeepers", async ({ query, user }) => {
     const { service, city, maxRate, avail, sort } = Object.fromEntries(query);
     const where = ["u.email_verified_at IS NOT NULL"], params = [];
+    // Sample (dummy) housekeepers are only listed for the owner.
+    if (!isAdmin(user)) where.push("lower(u.email) NOT LIKE '%@dummy.test'");
     const add = (sql, v) => { params.push(v); where.push(sql.replace("?", `$${params.length}`)); };
     if (service) add("p.services @> jsonb_build_array(?::text)", service);
     if (city) add("p.city ILIKE '%' || ? || '%'", likeEscape(city));
@@ -251,7 +264,7 @@ async function createApp({
     params.push(user ? user.id : 0); // `mine`: lets the apps show "this is you" instead of a contact button on your own card
     const rows = await db.query(
       `SELECT p.user_id AS id, u.name, p.city, p.rate, p.exp, p.avail, p.services, p.bio,
-              ROUND(r.avg::numeric, 1)::float8 AS rating, COALESCE(r.n, 0) AS reviews, (p.user_id = $${params.length}) AS mine
+              ROUND(r.avg::numeric, 1)::float8 AS rating, COALESCE(r.n, 0) AS reviews, (p.user_id = $${params.length}) AS mine, (lower(u.email) LIKE '%@dummy.test') AS sample
        FROM profiles p
        JOIN users u ON u.id = p.user_id
        LEFT JOIN (SELECT hk_id, AVG(rating) AS avg, COUNT(*)::int AS n FROM reviews GROUP BY hk_id) r ON r.hk_id = p.user_id
@@ -286,7 +299,7 @@ async function createApp({
   route("POST", "/api/requests", async ({ user, body }) => {
     const hkId = toId(body.housekeeperId);
     if (hkId === user.id) throw bad("You can't send a request to yourself.");
-    if (!hkId || !(await db.one("SELECT 1 FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = $1 AND u.email_verified_at IS NOT NULL", [hkId]))) throw new HttpError(404, "housekeeper not found");
+    if (!hkId || !(await db.one("SELECT 1 FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = $1 AND u.email_verified_at IS NOT NULL AND ($2 OR lower(u.email) NOT LIKE '%@dummy.test')", [hkId, isAdmin(user)]))) throw new HttpError(404, "housekeeper not found");
     const phone = str(body.phone, 30, { required: true, label: "phone" });
     if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone");
     try {
@@ -394,6 +407,15 @@ async function createApp({
     const row = await db.one("INSERT INTO messages (request_id, sender_id, body) VALUES ($1,$2,$3) RETURNING id, created_at", [c.id, user.id, text]);
     return [201, { id: row.id, mine: true, body: text, created_at: row.created_at }];
   }, { auth: true, verified: true });
+
+  // ---- owner-only sample data: add or remove with one click. Anyone else gets a plain 404, as if the route didn't exist. ----
+  route("POST", "/api/admin/sample-data", async ({ user, body }) => {
+    if (!isAdmin(user)) throw new HttpError(404, "not found");
+    if (!["add", "remove"].includes(body.action)) throw bad("action must be add or remove");
+    // Nobody knows the sample accounts' password, so nobody can sign in as one of them.
+    const done = body.action === "add" ? await dummy.addDummy(db, { password: crypto.randomBytes(32).toString("hex") }) : await dummy.removeDummy(db);
+    return { ok: true, ...done, sampleHousekeepers: await dummy.countDummy(db) };
+  });
 
   route("GET", "/api/meta", async () => ({ services: SERVICES, availability: AVAIL }));
 
