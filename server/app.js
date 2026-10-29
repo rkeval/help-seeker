@@ -63,6 +63,7 @@ function makeLimiter(max, windowMs) {
 const RESET_TTL_MS = 60 * 60 * 1000;
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const RESEND_COOLDOWN_SECONDS = 60;
+const MESSAGES_PER_MINUTE = 20;
 
 async function createApp({
   databaseUrl = process.env.DATABASE_URL,
@@ -225,7 +226,10 @@ async function createApp({
     const profile = user.role === "housekeeper"
       ? await db.one("SELECT city, phone, rate, exp, avail, services, bio FROM profiles WHERE user_id = $1", [user.id])
       : null;
-    return { user, profile };
+    const unread = await db.one(
+      `SELECT COUNT(*)::int AS n FROM messages m JOIN requests r ON r.id = m.request_id
+       WHERE m.read_at IS NULL AND m.sender_id <> $1 AND (r.seeker_id = $1 OR r.hk_id = $1)`, [user.id]);
+    return { user, profile, unreadMessages: unread.n };
   });
 
   // ---- housekeepers ----
@@ -298,14 +302,16 @@ async function createApp({
       return db.query(
         `SELECT r.id, r.status, r.when_text AS "when", r.note, r.created_at, r.hk_id, u.name AS hk_name,
            CASE WHEN r.status = 'accepted' THEN p.phone END AS hk_phone,
-           (SELECT rating FROM reviews WHERE request_id = r.id) AS my_rating
+           (SELECT rating FROM reviews WHERE request_id = r.id) AS my_rating,
+           (SELECT COUNT(*)::int FROM messages m WHERE m.request_id = r.id AND m.sender_id <> $1 AND m.read_at IS NULL) AS unread
          FROM requests r JOIN users u ON u.id = r.hk_id JOIN profiles p ON p.user_id = r.hk_id
          WHERE r.seeker_id = $1 ORDER BY r.id DESC`,
         [user.id]
       );
     }
     return db.query(
-      `SELECT r.id, r.status, r.when_text AS "when", r.note, r.created_at, u.name AS seeker_name, r.seeker_phone
+      `SELECT r.id, r.status, r.when_text AS "when", r.note, r.created_at, u.name AS seeker_name, r.seeker_phone,
+         (SELECT COUNT(*)::int FROM messages m WHERE m.request_id = r.id AND m.sender_id <> $1 AND m.read_at IS NULL) AS unread
        FROM requests r JOIN users u ON u.id = r.seeker_id WHERE r.hk_id = $1 ORDER BY r.id DESC`,
       [user.id]
     );
@@ -340,6 +346,40 @@ async function createApp({
     }
     return [201, { ok: true }];
   }, { auth: true, role: "seeker" });
+
+  // ---- messages: a conversation lives inside an accepted request, between exactly its two people ----
+  // Non-participants get 404 (not 403) so request ids can't be probed. Messaging opens when the housekeeper accepts,
+  // the same moment their phone number is revealed, so nobody can message a housekeeper who hasn't agreed to talk.
+  async function loadConversation(user, rawId) {
+    const id = toId(rawId);
+    const r = id && await db.one(
+      `SELECT r.id, r.status, CASE WHEN r.seeker_id = $2 THEN hk.name ELSE s.name END AS other_name
+       FROM requests r JOIN users s ON s.id = r.seeker_id JOIN users hk ON hk.id = r.hk_id
+       WHERE r.id = $1 AND (r.seeker_id = $2 OR r.hk_id = $2)`, [id, user.id]);
+    if (!r) throw new HttpError(404, "conversation not found");
+    if (r.status !== "accepted") throw new HttpError(409, "Messaging opens once the housekeeper accepts the request.");
+    return r;
+  }
+
+  route("GET", "/api/requests/:id/messages", async ({ user, params, query }) => {
+    const c = await loadConversation(user, params.id);
+    const after = toId(query.get("after")) || 0; // only newer messages, so polling stays cheap
+    // Opening/polling a conversation counts as reading what the other person sent.
+    await db.query("UPDATE messages SET read_at = now() WHERE request_id = $1 AND sender_id <> $2 AND read_at IS NULL", [c.id, user.id]);
+    const messages = await db.query(
+      "SELECT id, sender_id = $2 AS mine, body, created_at FROM messages WHERE request_id = $1 AND id > $3 ORDER BY id LIMIT 200",
+      [c.id, user.id, after]);
+    return { with: c.other_name, messages };
+  }, { auth: true, verified: true });
+
+  route("POST", "/api/requests/:id/messages", async ({ user, params, body }) => {
+    const c = await loadConversation(user, params.id);
+    const text = str(body.body, 1000, { required: true, label: "message" });
+    const recent = await db.one("SELECT COUNT(*)::int AS n FROM messages WHERE sender_id = $1 AND created_at > now() - interval '1 minute'", [user.id]);
+    if (recent.n >= MESSAGES_PER_MINUTE) throw new HttpError(429, "You're sending messages too fast. Please wait a moment.");
+    const row = await db.one("INSERT INTO messages (request_id, sender_id, body) VALUES ($1,$2,$3) RETURNING id, created_at", [c.id, user.id, text]);
+    return [201, { id: row.id, mine: true, body: text, created_at: row.created_at }];
+  }, { auth: true, verified: true });
 
   route("GET", "/api/meta", async () => ({ services: SERVICES, availability: AVAIL }));
 

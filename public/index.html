@@ -122,6 +122,20 @@
     </form>
   </dialog>
 
+  <dialog id="chat-dlg" aria-labelledby="chat-title">
+    <div class="stack">
+      <div class="row between">
+        <h3 id="chat-title"></h3>
+        <button type="button" class="ghost" id="chat-close">Close</button>
+      </div>
+      <div id="chat-log" class="chat-log" role="log" aria-live="polite"></div>
+      <form id="chat-form" class="row">
+        <input name="body" maxlength="1000" placeholder="Write a message…" autocomplete="off" required aria-label="Message">
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  </dialog>
+
   <script src="app.js"></script>
 </body>
 </html>

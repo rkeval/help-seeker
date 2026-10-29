@@ -2,15 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, FlatList, Linking, Text, View } from "react-native";
 import { api } from "../api";
 import type { HousekeeperRequest, SeekerRequest, User } from "../types";
+import ChatModal from "./ChatModal";
 import { Button, Card, Chip, Loading, Muted, useTheme } from "../ui";
 
 type Row = SeekerRequest | HousekeeperRequest;
 
-export default function RequestsScreen({ user }: { user: User }) {
+export default function RequestsScreen({ user, onUnreadChange }: { user: User; onUnreadChange?: () => void }) {
   const t = useTheme();
   const isHk = user.role === "housekeeper";
   const [rows, setRows] = useState<Row[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [chat, setChat] = useState<{ id: number; name: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -29,6 +31,7 @@ export default function RequestsScreen({ user }: { user: User }) {
 
   if (rows === null) return <Loading />;
   return (
+    <>
     <FlatList
       data={rows}
       keyExtractor={(r) => String(r.id)}
@@ -57,6 +60,12 @@ export default function RequestsScreen({ user }: { user: User }) {
                 <View style={{ flex: 1 }}><Button kind="ghost" title="Decline" onPress={() => act(() => api.answer(r.id, "declined"))} /></View>
               </View>
             )}
+            {r.status === "accepted" && (
+              <Button
+                title={r.unread ? `Messages (${r.unread} new)` : "Messages"}
+                onPress={() => setChat({ id: r.id, name: hkRow ? hkRow.seeker_name : seekerRow?.hk_name ?? "" })}
+              />
+            )}
             {seekerRow && r.status === "accepted" && (seekerRow.my_rating
               ? <Muted>You rated this {"★".repeat(seekerRow.my_rating)}</Muted>
               : (
@@ -69,5 +78,13 @@ export default function RequestsScreen({ user }: { user: User }) {
         );
       }}
     />
+    {chat && (
+      <ChatModal
+        requestId={chat.id}
+        name={chat.name}
+        onClose={() => { setChat(null); void load(); onUnreadChange?.(); }}
+      />
+    )}
+    </>
   );
 }

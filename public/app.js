@@ -37,7 +37,10 @@ function renderShell() {
     : `<button id="signin">Sign in / Create account</button>`;
   const tabs = [["find", "Find a housekeeper"]];
   if (u?.role === "housekeeper") tabs.push(["profile", "My profile"]);
-  if (u) tabs.push(["requests", u.role === "housekeeper" ? "Incoming requests" : "My requests"]);
+  if (u) {
+    const unread = me.unreadMessages ? ` (${me.unreadMessages} new)` : "";
+    tabs.push(["requests", (u.role === "housekeeper" ? "Incoming requests" : "My requests") + unread]);
+  }
   if (u) tabs.push(["account", "Account"]);
   $("#nav").innerHTML = tabs.map(([id, label]) => `<button data-tab="${id}" class="${id === tab ? "active" : ""}">${label}</button>`).join("");
   const needsVerify = !!u && !u.emailVerified;
@@ -181,11 +184,13 @@ async function loadRequests() {
       ${isHk && r.status === "pending" ? `<div class="actions"><button data-act="accepted" data-id="${r.id}">Accept</button><button class="ghost" data-act="declined" data-id="${r.id}">Decline</button></div>` : ""}
       ${!isHk && r.status === "accepted" && !r.my_rating ? `<div class="actions"><select aria-label="Rating">${[5, 4, 3, 2, 1].map((n) => `<option value="${n}">${"★".repeat(n)}</option>`).join("")}</select><button data-review="${r.id}">Leave a review</button></div>` : ""}
       ${r.my_rating ? `<div class="muted">You rated this ${"★".repeat(r.my_rating)}</div>` : ""}
+      ${r.status === "accepted" ? `<div class="actions"><button data-chat="${r.id}" data-name="${esc(isHk ? r.seeker_name : r.hk_name)}">Messages${r.unread ? ` (${r.unread} new)` : ""}</button></div>` : ""}
     </div>`).join("") || `<p class="muted">Nothing here yet.</p>`;
 }
 $("#req-list").addEventListener("click", guard(async (e) => {
   const b = e.target.closest("button");
   if (!b) return;
+  if (b.dataset.chat) return openChat(Number(b.dataset.chat), b.dataset.name);
   if (b.dataset.act) await api("PATCH", `/api/requests/${b.dataset.id}`, { status: b.dataset.act });
   else if (b.dataset.review) {
     await api("POST", `/api/requests/${b.dataset.review}/review`, { rating: Number(b.parentElement.querySelector("select").value) });
@@ -193,6 +198,88 @@ $("#req-list").addEventListener("click", guard(async (e) => {
   } else return;
   await loadRequests();
 }));
+
+// ---------- messages ----------
+// A conversation belongs to one accepted request. While it's open we poll for new messages every few seconds.
+let chat = null; // { id, last, seen:Set, timer }
+
+function renderMessage(m) {
+  const div = document.createElement("div");
+  div.className = "bubble" + (m.mine ? " mine" : "");
+  div.append(document.createTextNode(m.body)); // text node: message content is never parsed as HTML
+  const t = document.createElement("time");
+  t.dateTime = m.created_at;
+  t.textContent = new Date(m.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  div.append(t);
+  return div;
+}
+
+function addMessages(list) {
+  const log = $("#chat-log");
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  let added = false;
+  for (const m of list) {
+    if (chat.seen.has(m.id)) continue;
+    chat.seen.add(m.id);
+    log.querySelector(".empty")?.remove();
+    log.append(renderMessage(m)); added = true;
+  }
+  if (added && nearBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function pollChat() {
+  if (!chat) return;
+  const c = chat;
+  const r = await api("GET", `/api/requests/${c.id}/messages?after=${c.last}`);
+  if (chat !== c) return; // closed or switched while waiting
+  if (r.messages.length) c.last = Math.max(c.last, ...r.messages.map((m) => m.id));
+  addMessages(r.messages);
+  if (!c.seen.size && !$("#chat-log .empty")) $("#chat-log").innerHTML = '<p class="empty muted">No messages yet. Say hello!</p>';
+  if (!c.first) $("#chat-log").scrollTop = $("#chat-log").scrollHeight; // jump to the latest message when opening
+  c.first = true;
+  refreshBadge();
+}
+
+async function openChat(id, name) {
+  closeChat();
+  chat = { id, last: 0, seen: new Set(), timer: null, first: false };
+  $("#chat-title").textContent = `Chat with ${name}`;
+  $("#chat-log").innerHTML = "";
+  $("#chat-dlg").showModal();
+  await pollChat();
+  if (!chat || chat.id !== id) return;
+  chat.timer = setInterval(() => { if (!document.hidden) pollChat().catch(() => {}); }, 4000);
+  $("#chat-form [name=body]").focus();
+}
+
+function closeChat() {
+  if (!chat) return;
+  clearInterval(chat.timer); chat = null;
+  if ($("#chat-dlg").open) $("#chat-dlg").close();
+  if (tab === "requests") loadRequests().catch(() => {});
+  refreshBadge();
+}
+$("#chat-close").addEventListener("click", closeChat);
+$("#chat-dlg").addEventListener("cancel", () => closeChat()); // Esc key
+$("#chat-form").addEventListener("submit", guard(async (e) => {
+  const input = e.target.elements.body;
+  const text = input.value.trim();
+  if (!text || !chat) return;
+  const m = await api("POST", `/api/requests/${chat.id}/messages`, { body: text });
+  input.value = "";
+  addMessages([m]); // shown immediately; `last` only advances on polls so nothing from the other side is skipped
+  $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
+}));
+
+// keeps the "(n new)" label on the Requests tab fresh
+async function refreshBadge() {
+  if (!me?.user) return;
+  try { await refreshMe(); renderShell(); } catch { /* offline: keep the old number */ }
+}
+setInterval(() => {
+  if (!me?.user || document.hidden) return;
+  refreshBadge().then(() => { if (tab === "requests" && !chat) loadRequests().catch(() => {}); });
+}, 20000);
 
 // ---------- boot ----------
 (async () => {

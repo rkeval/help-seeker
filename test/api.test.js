@@ -500,3 +500,142 @@ test("completing a password reset also verifies the email address", async (t) =>
   const login = await client()("POST", "/api/login", { email: "p@x.com", password: "brand-new-pass" });
   assert.equal(login.body.emailVerified, true);
 });
+
+// ---- messaging ----
+// A verified housekeeper and household with one request; `accept` decides whether it was accepted.
+async function chatSetup(t, { accept = true } = {}) {
+  const ctx = await start();
+  t.after(() => ctx.server.close());
+  const { client, register } = ctx;
+  const hk = client(), s = client(), anon = client();
+  await register(hk, { email: "h@x.com", name: "Hema", password: "password123", role: "housekeeper" });
+  await hk("PUT", "/api/profile", profile);
+  await register(s, { email: "s@x.com", name: "Sam", password: "password123", role: "seeker" });
+  const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
+  await s("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" });
+  const reqId = (await s("GET", "/api/requests")).body[0].id;
+  if (accept) await hk("PATCH", `/api/requests/${reqId}`, { status: "accepted" });
+  return { ...ctx, hk, s, anon, hkId, reqId, msgs: `/api/requests/${reqId}/messages` };
+}
+
+test("messaging: both people talk inside an accepted request, with unread counts and read marking", async (t) => {
+  const { hk, s, msgs } = await chatSetup(t);
+
+  assert.deepEqual((await s("GET", msgs)).body, { with: "Hema", messages: [] });
+  assert.equal((await hk("GET", msgs)).body.with, "Sam");
+
+  const sent = await s("POST", msgs, { body: "  Hi Hema, are you free Monday?  " });
+  assert.equal(sent.status, 201);
+  assert.equal(sent.body.body, "Hi Hema, are you free Monday?"); // trimmed
+  assert.equal(sent.body.mine, true);
+
+  // the sender polling their own conversation (as the apps do) must not mark their message as read by the other person
+  await s("GET", msgs); await s("GET", `${msgs}?after=${sent.body.id}`);
+
+  // the housekeeper sees one unread message everywhere it's counted; the sender sees none
+  assert.equal((await hk("GET", "/api/me")).body.unreadMessages, 1);
+  assert.equal((await hk("GET", "/api/requests")).body[0].unread, 1);
+  assert.equal((await s("GET", "/api/me")).body.unreadMessages, 0);
+  assert.equal((await s("GET", "/api/requests")).body[0].unread, 0);
+
+  // reading it clears the unread count and flips `mine` per viewer
+  let r = await hk("GET", msgs);
+  assert.deepEqual(r.body.messages.map((m) => [m.body, m.mine]), [["Hi Hema, are you free Monday?", false]]);
+  assert.equal((await hk("GET", "/api/me")).body.unreadMessages, 0);
+  assert.equal((await hk("GET", "/api/requests")).body[0].unread, 0);
+
+  // reply, then the household sees it as unread; messages come back oldest first
+  await hk("POST", msgs, { body: "Yes, from 9am.\nSecond line" });
+  await s("POST", msgs, { body: "Perfect" });
+  assert.equal((await s("GET", "/api/me")).body.unreadMessages, 1);
+  r = await s("GET", msgs);
+  assert.deepEqual(r.body.messages.map((m) => [m.body, m.mine]),
+    [["Hi Hema, are you free Monday?", true], ["Yes, from 9am.\nSecond line", false], ["Perfect", true]]);
+  assert.equal((await s("GET", "/api/me")).body.unreadMessages, 0);
+
+  // polling only returns what's new
+  const lastId = r.body.messages[1].id;
+  assert.deepEqual((await s("GET", `${msgs}?after=${lastId}`)).body.messages.map((m) => m.body), ["Perfect"]);
+  assert.deepEqual((await s("GET", `${msgs}?after=nonsense`)).body.messages.length, 3); // bad cursor = from the start
+  assert.match(r.body.messages[0].created_at, /^\d{4}-\d\d-\d\dT[\d:.]+Z$/);
+});
+
+test("messaging: only the two people in the request can read or write, and only once it's accepted", async (t) => {
+  const { hk, s, anon, client, register, msgs, reqId } = await chatSetup(t);
+  await s("POST", msgs, { body: "private" });
+
+  assert.equal((await anon("GET", msgs)).status, 401);
+  assert.equal((await anon("POST", msgs, { body: "x" })).status, 401);
+
+  // a stranger of either kind gets the same 404 as a request that doesn't exist, so ids can't be probed
+  const other = client(), otherHk = client();
+  await register(other, { email: "o@x.com", name: "Olu", password: "password123", role: "seeker" });
+  await register(otherHk, { email: "oh@x.com", name: "Oha", password: "password123", role: "housekeeper" });
+  for (const stranger of [other, otherHk]) {
+    for (const [m, body] of [["GET"], ["POST", { body: "hello" }]]) {
+      assert.equal((await stranger(m, msgs, body)).status, 404);
+    }
+  }
+  assert.equal((await s("GET", `/api/requests/${reqId + 999}/messages`)).status, 404);
+  for (const bad of ["abc", "0", "-3", "99999999999", "1e9"]) {
+    assert.equal((await s("GET", `/api/requests/${bad}/messages`)).status, 404, bad);
+    assert.equal((await s("POST", `/api/requests/${bad}/messages`, { body: "x" })).status, 404, bad);
+  }
+  assert.equal((await hk("GET", "/api/me")).body.unreadMessages, 1); // strangers' attempts changed nothing
+  assert.equal((await other("GET", "/api/me")).body.unreadMessages, 0);
+});
+
+test("messaging is closed for pending and declined requests", async (t) => {
+  const { hk, s, msgs, reqId } = await chatSetup(t, { accept: false });
+  for (const [m, body] of [["GET"], ["POST", { body: "hi" }]]) {
+    const r = await s(m, msgs, body);
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /once the housekeeper accepts/i);
+    assert.equal((await hk(m, msgs, body)).status, 409);
+  }
+  await hk("PATCH", `/api/requests/${reqId}`, { status: "declined" });
+  assert.equal((await s("POST", msgs, { body: "please?" })).status, 409);
+  assert.equal((await s("GET", "/api/me")).body.unreadMessages, 0);
+});
+
+test("messaging: message validation and limits", async (t) => {
+  const { s, msgs } = await chatSetup(t);
+  for (const body of [undefined, null, "", "   ", "\n\t", 42, ["a"], { a: 1 }, "x".repeat(1001)]) {
+    assert.equal((await s("POST", msgs, { body })).status, 400, JSON.stringify(body)?.slice(0, 20));
+  }
+  assert.equal((await s("POST", msgs, {})).status, 400);
+  assert.equal((await s("POST", msgs, { body: "x".repeat(1000) })).status, 201);
+  const html = `<img src=x onerror="alert(1)"> & 'quotes' 🙂 नमस्ते`;
+  assert.equal((await s("POST", msgs, { body: html })).status, 201);
+  const stored = (await s("GET", msgs)).body.messages.map((m) => m.body);
+  assert.equal(stored[1], html); // stored verbatim; the clients escape it when displaying
+});
+
+test("messaging: flooding is limited per sender, not per conversation partner", async (t) => {
+  const { hk, s, msgs } = await chatSetup(t);
+  for (let i = 0; i < 20; i++) assert.equal((await s("POST", msgs, { body: `m${i}` })).status, 201, `message ${i}`);
+  const blocked = await s("POST", msgs, { body: "one too many" });
+  assert.equal(blocked.status, 429);
+  assert.equal((await hk("POST", msgs, { body: "I can still answer" })).status, 201);
+  assert.equal((await s("GET", msgs)).body.messages.length, 21); // the blocked one was not stored
+});
+
+test("messaging: deleting an account removes the conversation for the other person too", async (t) => {
+  const { hk, s, db, msgs } = await chatSetup(t);
+  await s("POST", msgs, { body: "hi" });
+  await hk("POST", msgs, { body: "hello" });
+  assert.equal((await s("POST", "/api/account/delete", { password: "password123" })).status, 200);
+  assert.equal((await hk("GET", msgs)).status, 404);
+  assert.equal((await hk("GET", "/api/me")).body.unreadMessages, 0);
+  assert.equal((await db.one("SELECT COUNT(*)::int n FROM messages")).n, 0);
+});
+
+test("messaging requires a confirmed email", async (t) => {
+  const { s, db, msgs } = await chatSetup(t);
+  await db.query("UPDATE users SET email_verified_at = NULL WHERE email = 's@x.com'");
+  for (const [m, body] of [["GET"], ["POST", { body: "hi" }]]) {
+    const r = await s(m, msgs, body);
+    assert.equal(r.status, 403);
+    assert.equal(r.body.code, "email_not_verified");
+  }
+});

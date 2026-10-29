@@ -62,6 +62,17 @@ const SCHEMA_SQL = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   CREATE INDEX IF NOT EXISTS reviews_hk_idx ON reviews(hk_id);
+  CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL CHECK (char_length(body) BETWEEN 1 AND 1000),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    read_at TIMESTAMPTZ
+  );
+  CREATE INDEX IF NOT EXISTS messages_request_idx ON messages(request_id, id);
+  CREATE INDEX IF NOT EXISTS messages_unread_idx ON messages(request_id) WHERE read_at IS NULL;
+  CREATE INDEX IF NOT EXISTS messages_sender_idx ON messages(sender_id, created_at);
 `;
 
 // Postgres error codes we turn into friendly HTTP errors
