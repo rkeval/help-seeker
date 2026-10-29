@@ -4,7 +4,7 @@ import { api } from "../api";
 import type { Meta, Profile } from "../types";
 import { Button, Chip, Field, Muted, useTheme } from "../ui";
 
-export default function ProfileScreen({ meta, initial, onSaved }: { meta: Meta; initial: Profile | null; onSaved: () => void }) {
+export default function ProfileScreen({ meta, initial, emailVerified, onSaved }: { meta: Meta; initial: Profile | null; emailVerified: boolean; onSaved: () => void }) {
   const t = useTheme();
   const [city, setCity] = useState(initial?.city ?? "");
   const [phone, setPhone] = useState(initial?.phone ?? "");
@@ -21,7 +21,7 @@ export default function ProfileScreen({ meta, initial, onSaved }: { meta: Meta; 
     setBusy(true);
     try {
       await api.saveProfile({ city, phone, rate: Number(rate), exp: Number(exp) || 0, avail, services, bio });
-      Alert.alert("Saved", "Households can now find you.");
+      Alert.alert("Saved", emailVerified ? "Households can now find you." : "Your profile will appear in search once you confirm your email.");
       onSaved();
     } catch (e) {
       Alert.alert("Couldn't save", (e as Error).message);

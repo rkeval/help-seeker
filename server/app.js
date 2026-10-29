@@ -12,7 +12,7 @@ const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const MIME = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".ico": "image/x-icon" };
 
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, code) { super(message); this.status = status; this.code = code; }
 }
 const bad = (m) => new HttpError(400, m);
 
@@ -61,6 +61,8 @@ function makeLimiter(max, windowMs) {
 }
 
 const RESET_TTL_MS = 60 * 60 * 1000;
+const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
+const RESEND_COOLDOWN_SECONDS = 60;
 
 async function createApp({
   databaseUrl = process.env.DATABASE_URL,
@@ -83,8 +85,27 @@ async function createApp({
   };
 
   const routes = [];
-  const route = (method, pattern, handler, { auth: needAuth = false, role } = {}) =>
-    routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)")}$`), handler, needAuth, role });
+  const route = (method, pattern, handler, { auth: needAuth = false, role, verified = false } = {}) =>
+    routes.push({ method, re: new RegExp(`^${pattern.replace(/:(\w+)/g, "(?<$1>[^/]+)")}$`), handler, needAuth, role, verified });
+
+  // Issues a fresh verification link (replacing any earlier one) and emails it. Mail failures are logged, not thrown,
+  // so a flaky provider can't block sign-up; the user can ask for another email.
+  async function sendVerificationEmail(user) {
+    const token = crypto.randomBytes(32).toString("base64url");
+    await db.query("DELETE FROM email_verifications WHERE user_id = $1 OR expires_at < now()", [user.id]);
+    await db.query("INSERT INTO email_verifications (token_hash,user_id,expires_at) VALUES ($1,$2,$3)",
+      [auth.sha256(token), user.id, new Date(Date.now() + VERIFY_TTL_MS)]);
+    const link = `${appUrl.replace(/\/$/, "")}/verify.html?token=${token}`;
+    try {
+      await sendMail({
+        to: user.email,
+        subject: "Confirm your email for Help Seeker",
+        text: `Hi ${user.name},\n\nConfirm your email address to start using Help Seeker (link valid for 24 hours):\n\n${link}\n\nIf you didn't create an account, ignore this email.`,
+      });
+    } catch (e) {
+      console.error("verification email failed:", e.message);
+    }
+  }
 
   // ---- auth ----
   route("POST", "/api/register", async ({ body, ip, setToken }) => {
@@ -105,7 +126,8 @@ async function createApp({
       throw e;
     }
     setToken(await auth.createSession(db, row.id));
-    return [201, { id: row.id, email, name, role: body.role }];
+    await sendVerificationEmail({ id: row.id, email, name });
+    return [201, { id: row.id, email, name, role: body.role, emailVerified: false }];
   });
 
   route("POST", "/api/login", async ({ body, ip, setToken }) => {
@@ -115,7 +137,7 @@ async function createApp({
     const ok = row && typeof body.password === "string" && auth.verifyPassword(body.password, row.pass_hash);
     if (!ok) throw new HttpError(401, "wrong email or password");
     setToken(await auth.createSession(db, row.id));
-    return { id: row.id, email: row.email, name: row.name, role: row.role };
+    return { id: row.id, email: row.email, name: row.name, role: row.role, emailVerified: !!row.email_verified_at };
   });
 
   route("POST", "/api/logout", async ({ token, setToken }) => {
@@ -123,6 +145,28 @@ async function createApp({
     setToken(null);
     return { ok: true };
   });
+
+  route("POST", "/api/email-verification/confirm", async ({ body, ip }) => {
+    limitAuth(ip);
+    const token = typeof body.token === "string" ? body.token : "";
+    // One atomic statement consumes the token; only an unexpired one verifies the account.
+    const row = await db.one("DELETE FROM email_verifications WHERE token_hash = $1 RETURNING user_id, expires_at > now() AS valid",
+      [auth.sha256(token)]);
+    if (!row || !row.valid) throw bad("this confirmation link is invalid or has expired");
+    await db.query("UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1", [row.user_id]);
+    return { ok: true };
+  });
+
+  route("POST", "/api/email-verification/resend", async ({ user, ip }) => {
+    limitAuth(ip);
+    if (user.emailVerified) return { ok: true, alreadyVerified: true };
+    const recent = await db.one(
+      "SELECT 1 FROM email_verifications WHERE user_id = $1 AND created_at > now() - make_interval(secs => $2)",
+      [user.id, RESEND_COOLDOWN_SECONDS]);
+    if (recent) throw new HttpError(429, "We just sent you an email. Please wait a minute before asking for another.");
+    await sendVerificationEmail(user);
+    return { ok: true };
+  }, { auth: true });
 
   // Always answers the same way so the endpoint can't be used to discover which emails have accounts.
   route("POST", "/api/password-reset/request", async ({ body, ip }) => {
@@ -157,7 +201,9 @@ async function createApp({
     const row = await db.one("DELETE FROM password_resets WHERE token_hash = $1 RETURNING user_id, expires_at > now() AS valid",
       [auth.sha256(token)]);
     if (!row || !row.valid) throw bad("this reset link is invalid or has expired");
-    await db.query("UPDATE users SET pass_hash = $1 WHERE id = $2", [auth.hashPassword(password), row.user_id]);
+    // Following the emailed link proves the user controls the address, so it verifies it too.
+    await db.query("UPDATE users SET pass_hash = $1, email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $2",
+      [auth.hashPassword(password), row.user_id]);
     await db.query("DELETE FROM password_resets WHERE user_id = $1", [row.user_id]);
     await auth.destroyAllSessions(db, row.user_id); // anyone holding an old session is signed out
     return { ok: true };
@@ -185,7 +231,7 @@ async function createApp({
   // ---- housekeepers ----
   route("GET", "/api/housekeepers", async ({ query }) => {
     const { service, city, maxRate, avail, sort } = Object.fromEntries(query);
-    const where = [], params = [];
+    const where = ["u.email_verified_at IS NOT NULL"], params = [];
     const add = (sql, v) => { params.push(v); where.push(sql.replace("?", `$${params.length}`)); };
     if (service) add("p.services @> jsonb_build_array(?::text)", service);
     if (city) add("p.city ILIKE '%' || ? || '%'", likeEscape(city));
@@ -202,7 +248,7 @@ async function createApp({
        FROM profiles p
        JOIN users u ON u.id = p.user_id
        LEFT JOIN (SELECT hk_id, AVG(rating) AS avg, COUNT(*)::int AS n FROM reviews GROUP BY hk_id) r ON r.hk_id = p.user_id
-       ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       WHERE ${where.join(" AND ")}
        ORDER BY ${order}, p.user_id
        LIMIT 200`,
       params
@@ -232,7 +278,7 @@ async function createApp({
   // ---- requests ----
   route("POST", "/api/requests", async ({ user, body }) => {
     const hkId = toId(body.housekeeperId);
-    if (!hkId || !(await db.one("SELECT 1 FROM profiles WHERE user_id = $1", [hkId]))) throw new HttpError(404, "housekeeper not found");
+    if (!hkId || !(await db.one("SELECT 1 FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = $1 AND u.email_verified_at IS NOT NULL", [hkId]))) throw new HttpError(404, "housekeeper not found");
     const phone = str(body.phone, 30, { required: true, label: "phone" });
     if (!/^[0-9+\-() ]{7,}$/.test(phone)) throw bad("invalid phone");
     try {
@@ -245,7 +291,7 @@ async function createApp({
       if (db.isUniqueViolation(e)) throw new HttpError(409, "you already have a pending request with this housekeeper");
       throw e;
     }
-  }, { auth: true, role: "seeker" });
+  }, { auth: true, role: "seeker", verified: true });
 
   route("GET", "/api/requests", async ({ user }) => {
     if (user.role === "seeker") {
@@ -276,7 +322,7 @@ async function createApp({
     if (done) return { ok: true };
     const exists = id && await db.one("SELECT 1 FROM requests WHERE id = $1 AND hk_id = $2", [id, user.id]);
     throw exists ? new HttpError(409, "request already answered") : new HttpError(404, "request not found");
-  }, { auth: true, role: "housekeeper" });
+  }, { auth: true, role: "housekeeper", verified: true });
 
   route("POST", "/api/requests/:id/review", async ({ user, body, params }) => {
     const id = toId(params.id);
@@ -322,6 +368,9 @@ async function createApp({
     if (!matched) throw new HttpError(pathMatch ? 405 : 404, pathMatch ? "method not allowed" : "not found");
     if (matched.needAuth && !user) throw new HttpError(401, "sign in required");
     if (matched.role && user.role !== matched.role) throw new HttpError(403, `only ${matched.role}s can do this`);
+    if (matched.verified && !user.emailVerified) {
+      throw new HttpError(403, "Please verify your email address first. We sent you a link when you signed up.", "email_not_verified");
+    }
 
     const body = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) ? await readJson(req) : {};
     const out = await matched.handler({ user, body, params, query: url.searchParams, token, setToken, ip: clientIp(req) });
@@ -353,7 +402,7 @@ async function createApp({
       const status = e.status || 500;
       if (status === 500) console.error(e);
       if (!res.headersSent) res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: status === 500 ? "internal error" : e.message }));
+      res.end(JSON.stringify({ error: status === 500 ? "internal error" : e.message, ...(e.code && status !== 500 ? { code: e.code } : {}) }));
     }
   });
   server.on("close", () => { db.close().catch((e) => console.error("db close failed:", e.message)); });

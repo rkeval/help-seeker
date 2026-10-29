@@ -10,7 +10,9 @@ const test = (name, fn) => nodeTest(name, { skip: !TEST_URL && "set TEST_DATABAS
 
 async function start(opts = {}) {
   const schema = "t_" + crypto.randomBytes(6).toString("hex");
-  const { server, db } = await createApp({ databaseUrl: TEST_URL, schema, sendMail: async () => {}, ...opts });
+  const mails = []; // every email the app "sent"
+  const sendMail = async (m) => { mails.push(m); if (opts.sendMail) await opts.sendMail(m); };
+  const { server, db } = await createApp({ databaseUrl: TEST_URL, schema, ...opts, sendMail });
   await new Promise((r) => server.listen(0, r));
   const base = `http://localhost:${server.address().port}`;
   // tiny client that keeps a cookie jar per "browser"
@@ -29,22 +31,32 @@ async function start(opts = {}) {
       return { status: res.status, body: json, headers: res.headers };
     };
   };
-  return { server, client, db };
+  // Signs a user up and, like a real user, clicks the confirmation link in the email they were sent.
+  const register = async (c, body) => {
+    const r = await c("POST", "/api/register", body);
+    const mail = [...mails].reverse().find((m) => m.to === body.email.toLowerCase() && m.text.includes("/verify.html"));
+    if (r.status === 201) {
+      const token = /token=([\w-]+)/.exec(mail.text)[1];
+      assert.equal((await c("POST", "/api/email-verification/confirm", { token })).status, 200);
+    }
+    return r;
+  };
+  return { server, client, db, mails, register };
 }
 
 const profile = { city: "Pune", phone: "+91 98000 11111", rate: 150, exp: 4, avail: "Full-time", services: ["Cleaning", "Cooking"], bio: "hi" };
 
 test("full flow: register, profile, search, request, accept, review", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const hk = client(), seeker = client(), anon = client();
 
-  let r = await hk("POST", "/api/register", { email: "h@x.com", name: "Hema", password: "password123", role: "housekeeper" });
+  let r = await register(hk, { email: "h@x.com", name: "Hema", password: "password123", role: "housekeeper" });
   assert.equal(r.status, 201);
   assert.match(r.headers.get("set-cookie"), /HttpOnly/);
   assert.equal((await hk("PUT", "/api/profile", profile)).status, 200);
 
-  await seeker("POST", "/api/register", { email: "s@x.com", name: "Sam", password: "password123", role: "seeker" });
+  await register(seeker, { email: "s@x.com", name: "Sam", password: "password123", role: "seeker" });
 
   // public search never leaks phone numbers
   r = await anon("GET", "/api/housekeepers?service=Cooking&city=pun");
@@ -79,7 +91,7 @@ test("full flow: register, profile, search, request, accept, review", async (t) 
 });
 
 test("auth rules", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const a = client(), b = client();
 
@@ -100,14 +112,14 @@ test("auth rules", async (t) => {
 });
 
 test("other users cannot answer or review someone else's request", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const hk1 = client(), hk2 = client(), s1 = client(), s2 = client();
-  await hk1("POST", "/api/register", { email: "1@x.com", name: "H1", password: "password123", role: "housekeeper" });
+  await register(hk1, { email: "1@x.com", name: "H1", password: "password123", role: "housekeeper" });
   await hk1("PUT", "/api/profile", profile);
-  await hk2("POST", "/api/register", { email: "2@x.com", name: "H2", password: "password123", role: "housekeeper" });
-  await s1("POST", "/api/register", { email: "3@x.com", name: "S1", password: "password123", role: "seeker" });
-  await s2("POST", "/api/register", { email: "4@x.com", name: "S2", password: "password123", role: "seeker" });
+  await register(hk2, { email: "2@x.com", name: "H2", password: "password123", role: "housekeeper" });
+  await register(s1, { email: "3@x.com", name: "S1", password: "password123", role: "seeker" });
+  await register(s2, { email: "4@x.com", name: "S2", password: "password123", role: "seeker" });
   const hkId = (await s1("GET", "/api/housekeepers")).body[0].id;
   await s1("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" });
   const id = (await s1("GET", "/api/requests")).body[0].id;
@@ -119,7 +131,7 @@ test("other users cannot answer or review someone else's request", async (t) => 
 });
 
 test("input hardening", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const c = client();
   const base = `http://localhost:${server.address().port}`;
@@ -133,7 +145,7 @@ test("input hardening", async (t) => {
 });
 
 test("mobile clients authenticate with a bearer token, browsers never get one", async (t) => {
-  const { server } = await start();
+  const { server, register, mails } = await start();
   t.after(() => server.close());
   const base = `http://localhost:${server.address().port}`;
   const post = (path, body, headers = {}) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -156,20 +168,20 @@ test("mobile clients authenticate with a bearer token, browsers never get one", 
 });
 
 test("password reset: emailed single-use link, revokes sessions, no account enumeration", async (t) => {
-  const mails = [];
-  const { server, client, db } = await start({ appUrl: "https://app.test", sendMail: async (m) => mails.push(m) });
+  const { server, client, db, register, mails } = await start({ appUrl: "https://app.test" });
+  const resets = () => mails.filter((m) => /Reset/.test(m.subject));
   t.after(() => server.close());
   const a = client(), other = client(), anon = client();
-  await a("POST", "/api/register", { email: "r@x.com", name: "R", password: "old-password-1", role: "seeker" });
+  await register(a, { email: "r@x.com", name: "R", password: "old-password-1", role: "seeker" });
 
   const known = await anon("POST", "/api/password-reset/request", { email: "R@x.com" });
   const unknown = await anon("POST", "/api/password-reset/request", { email: "nobody@x.com" });
   assert.deepEqual(known.body, unknown.body); // identical answer either way
-  assert.equal(mails.length, 1);
-  assert.equal(mails[0].to, "r@x.com");
-  const token = /reset\.html\?token=([\w-]+)/.exec(mails[0].text)[1];
-  assert.match(mails[0].text, /^Use this link/);
-  assert.ok(mails[0].text.includes("https://app.test/reset.html"));
+  assert.equal(resets().length, 1);
+  assert.equal(resets()[0].to, "r@x.com");
+  const token = /reset\.html\?token=([\w-]+)/.exec(resets()[0].text)[1];
+  assert.match(resets()[0].text, /^Use this link/);
+  assert.ok(resets()[0].text.includes("https://app.test/reset.html"));
 
   assert.equal((await anon("POST", "/api/password-reset/confirm", { token: "bogus", password: "new-password-1" })).status, 400);
   assert.equal((await anon("POST", "/api/password-reset/confirm", { token, password: "short" })).status, 400);
@@ -182,34 +194,35 @@ test("password reset: emailed single-use link, revokes sessions, no account enum
 
   // expired token
   await anon("POST", "/api/password-reset/request", { email: "r@x.com" });
-  const t2 = /token=([\w-]+)/.exec(mails[1].text)[1];
+  const t2 = /token=([\w-]+)/.exec(resets()[1].text)[1];
   await db.query("UPDATE password_resets SET expires_at = now() - interval '1 second'");
   assert.equal((await anon("POST", "/api/password-reset/confirm", { token: t2, password: "new-password-2" })).status, 400);
 
   // a new request replaces the earlier link
   await anon("POST", "/api/password-reset/request", { email: "r@x.com" });
   await anon("POST", "/api/password-reset/request", { email: "r@x.com" });
-  const [first, second] = [mails[2], mails[3]].map((m) => /token=([\w-]+)/.exec(m.text)[1]);
+  const [first, second] = [resets()[2], resets()[3]].map((m) => /token=([\w-]+)/.exec(m.text)[1]);
   assert.equal((await anon("POST", "/api/password-reset/confirm", { token: first, password: "new-password-3" })).status, 400);
   assert.equal((await anon("POST", "/api/password-reset/confirm", { token: second, password: "new-password-3" })).status, 200);
 });
 
 test("a failing mail provider doesn't change the response or crash", async (t) => {
-  const { server, client } = await start({ sendMail: async () => { throw new Error("boom"); } });
+  const { server, client, register, mails } = await start({ sendMail: async () => { throw new Error("boom"); } });
   t.after(() => server.close());
   const a = client();
-  await a("POST", "/api/register", { email: "f@x.com", name: "F", password: "password123", role: "seeker" });
+  const signup = await a("POST", "/api/register", { email: "f@x.com", name: "F", password: "password123", role: "seeker" });
+  assert.equal(signup.status, 201); // a broken mail provider must not block sign-up
   const r = await a("POST", "/api/password-reset/request", { email: "f@x.com" });
   assert.equal(r.status, 200);
 });
 
 test("account deletion removes the user and everything attached to them", async (t) => {
-  const { server, client, db } = await start();
+  const { server, client, db, register, mails } = await start();
   t.after(() => server.close());
   const hk = client(), s = client(), anon = client();
-  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await register(hk, { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
   await hk("PUT", "/api/profile", profile);
-  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  await register(s, { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
   const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
   await s("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" });
   const reqId = (await hk("GET", "/api/requests")).body[0].id;
@@ -238,11 +251,11 @@ test("account deletion removes the user and everything attached to them", async 
 });
 
 test("malformed ids return 4xx instead of crashing the database driver", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const hk = client(), s = client();
-  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
-  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  await register(hk, { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await register(s, { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
   for (const bad of ["abc", "NaN", -1, 0, 1.5, 99999999999, null, "1; DROP TABLE users"]) {
     assert.equal((await s("POST", "/api/requests", { housekeeperId: bad, phone: "1234567" })).status, 404, String(bad));
   }
@@ -254,12 +267,12 @@ test("malformed ids return 4xx instead of crashing the database driver", async (
 });
 
 test("concurrent duplicate requests and double-answers are resolved by the database", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const hk = client(), s = client(), anon = client();
-  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await register(hk, { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
   await hk("PUT", "/api/profile", profile);
-  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  await register(s, { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
   const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
 
   const sent = await Promise.all([1, 2, 3, 4].map(() => s("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" })));
@@ -276,25 +289,24 @@ test("concurrent duplicate requests and double-answers are resolved by the datab
 });
 
 test("a reset token can only be consumed once even under concurrency", async (t) => {
-  const mails = [];
-  const { server, client } = await start({ sendMail: async (m) => mails.push(m) });
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const a = client();
-  await a("POST", "/api/register", { email: "c@x.com", name: "C", password: "password123", role: "seeker" });
+  await register(a, { email: "c@x.com", name: "C", password: "password123", role: "seeker" });
   await a("POST", "/api/password-reset/request", { email: "c@x.com" });
-  const token = /token=([\w-]+)/.exec(mails[0].text)[1];
+  const token = /token=([\w-]+)/.exec(mails.find((m) => /Reset/.test(m.subject)).text)[1];
   const results = await Promise.all(["pw-number-one", "pw-number-two", "pw-number-three"]
     .map((password) => client()("POST", "/api/password-reset/confirm", { token, password })));
   assert.deepEqual(results.map((r) => r.status).sort(), [200, 400, 400]);
 });
 
 test("search: ordering, filters and LIKE wildcards are handled literally", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const anon = client(), s = client();
   const mk = async (email, name, over) => {
     const c = client();
-    await c("POST", "/api/register", { email, name, password: "password123", role: "housekeeper" });
+    await register(c, { email, name, password: "password123", role: "housekeeper" });
     await c("PUT", "/api/profile", { ...profile, ...over });
     return c;
   };
@@ -314,7 +326,7 @@ test("search: ordering, filters and LIKE wildcards are handled literally", async
   assert.deepEqual(await names("?service=" + encodeURIComponent("Cooking' OR '1'='1")), []);
 
   // unrated housekeepers sort after rated ones
-  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  await register(s, { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
   const alice = (await anon("GET", "/api/housekeepers?city=Pune")).body[0];
   await s("POST", "/api/requests", { housekeeperId: alice.id, phone: "1234567" });
   const rid = (await hkA("GET", "/api/requests")).body[0].id;
@@ -327,12 +339,12 @@ test("search: ordering, filters and LIKE wildcards are handled literally", async
 });
 
 test("timestamps are ISO strings and /healthz checks the database", async (t) => {
-  const { server, client } = await start();
+  const { server, client, register, mails } = await start();
   t.after(() => server.close());
   const hk = client(), s = client(), anon = client();
-  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await register(hk, { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
   await hk("PUT", "/api/profile", profile);
-  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  await register(s, { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
   const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
   await s("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" });
   const at = (await s("GET", "/api/requests")).body[0].created_at;
@@ -345,7 +357,7 @@ test("timestamps are ISO strings and /healthz checks the database", async (t) =>
 
 test("rate limiting is per client IP and honours X-Forwarded-For only when the proxy is trusted", async (t) => {
   const run = async (trustProxy) => {
-    const { server } = await start({ trustProxy });
+    const { server, register, mails } = await start({ trustProxy });
     t.after(() => server.close());
     const base = `http://localhost:${server.address().port}`;
     const hit = (ip) => fetch(base + "/api/login", {
@@ -357,4 +369,134 @@ test("rate limiting is per client IP and honours X-Forwarded-For only when the p
   };
   assert.deepEqual(await run(true), { first: 429, other: 401 });   // behind a proxy: users are limited separately
   assert.deepEqual(await run(false), { first: 429, other: 429 });  // not trusted: header is ignored, can't be used to dodge the limit
+});
+
+const tokenFrom = (mail) => /token=([\w-]+)/.exec(mail.text)[1];
+const verifyMails = (mails, to) => mails.filter((m) => m.to === to && m.text.includes("/verify.html"));
+
+test("new accounts get a confirmation email and start unverified", async (t) => {
+  const { server, client, mails } = await start({ appUrl: "https://app.test" });
+  t.after(() => server.close());
+  const a = client();
+  const r = await a("POST", "/api/register", { email: "New@X.com", name: "Nia", password: "password123", role: "seeker" });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.emailVerified, false);
+  assert.equal(mails.length, 1);
+  assert.equal(mails[0].to, "new@x.com");
+  assert.match(mails[0].text, /^Hi Nia,/);
+  assert.ok(mails[0].text.includes("https://app.test/verify.html?token="));
+  assert.equal((await a("GET", "/api/me")).body.user.emailVerified, false);
+
+  const login = await client()("POST", "/api/login", { email: "new@x.com", password: "password123" });
+  assert.equal(login.body.emailVerified, false);
+});
+
+test("unverified users can sign in and browse but not contact or be contacted", async (t) => {
+  const { server, client, mails } = await start();
+  t.after(() => server.close());
+  const hk = client(), s = client(), vhk = client(), anon = client();
+
+  // a verified housekeeper to contact
+  await vhk("POST", "/api/register", { email: "v@x.com", name: "Vera", password: "password123", role: "housekeeper" });
+  const vtoken = tokenFrom(verifyMails(mails, "v@x.com")[0]);
+  await vhk("PUT", "/api/profile", profile);
+  await anon("POST", "/api/email-verification/confirm", { token: vtoken });
+
+  // unverified housekeeper: can save a profile, but stays hidden and can't answer requests
+  await hk("POST", "/api/register", { email: "u@x.com", name: "Uma", password: "password123", role: "housekeeper" });
+  assert.equal((await hk("PUT", "/api/profile", profile)).status, 200);
+  assert.deepEqual((await anon("GET", "/api/housekeepers")).body.map((h) => h.name), ["Vera"]);
+  let r = await hk("PATCH", "/api/requests/1", { status: "accepted" });
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, "email_not_verified");
+
+  // unverified household: can browse, can't send a request
+  await s("POST", "/api/register", { email: "s@x.com", name: "Sam", password: "password123", role: "seeker" });
+  const veraId = (await s("GET", "/api/housekeepers")).body[0].id;
+  r = await s("POST", "/api/requests", { housekeeperId: veraId, phone: "1234567" });
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, "email_not_verified");
+  assert.match(r.body.error, /verify your email/i);
+
+  // nobody can send a request to an unverified housekeeper either, even a verified household
+  const umaId = (await hk("GET", "/api/me")).body.user.id;
+  await s("POST", "/api/email-verification/confirm", { token: tokenFrom(verifyMails(mails, "s@x.com")[0]) });
+  assert.equal((await s("POST", "/api/requests", { housekeeperId: umaId, phone: "1234567" })).status, 404);
+  assert.equal((await s("POST", "/api/requests", { housekeeperId: veraId, phone: "1234567" })).status, 201);
+});
+
+test("confirming the link verifies the account once, and bad or expired links are refused", async (t) => {
+  const { server, client, db, mails } = await start();
+  t.after(() => server.close());
+  const hk = client(), anon = client();
+  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await hk("PUT", "/api/profile", profile);
+  assert.equal((await anon("GET", "/api/housekeepers")).body.length, 0);
+
+  assert.equal((await anon("POST", "/api/email-verification/confirm", { token: "bogus" })).status, 400);
+  assert.equal((await anon("POST", "/api/email-verification/confirm", {})).status, 400);
+
+  const token = tokenFrom(verifyMails(mails, "h@x.com")[0]);
+  assert.equal((await anon("POST", "/api/email-verification/confirm", { token })).status, 200); // works without a session
+  assert.equal((await hk("GET", "/api/me")).body.user.emailVerified, true);
+  assert.equal((await anon("GET", "/api/housekeepers")).body.length, 1); // now listed
+  assert.equal((await anon("POST", "/api/email-verification/confirm", { token })).status, 400); // single use
+
+  // expired link
+  const late = client();
+  await late("POST", "/api/register", { email: "late@x.com", name: "L", password: "password123", role: "seeker" });
+  const t2 = tokenFrom(verifyMails(mails, "late@x.com")[0]);
+  await db.query("UPDATE email_verifications SET expires_at = now() - interval '1 second'");
+  assert.equal((await anon("POST", "/api/email-verification/confirm", { token: t2 })).status, 400);
+  assert.equal((await late("GET", "/api/me")).body.user.emailVerified, false);
+});
+
+test("a verification token can only be consumed once under concurrency", async (t) => {
+  const { server, client, mails } = await start();
+  t.after(() => server.close());
+  await client()("POST", "/api/register", { email: "c@x.com", name: "C", password: "password123", role: "seeker" });
+  const token = tokenFrom(verifyMails(mails, "c@x.com")[0]);
+  const results = await Promise.all([1, 2, 3, 4].map(() => client()("POST", "/api/email-verification/confirm", { token })));
+  assert.deepEqual(results.map((r) => r.status).sort(), [200, 400, 400, 400]);
+});
+
+test("resending: needs sign-in, is rate limited, replaces the old link, skips verified users", async (t) => {
+  const { server, client, db, mails } = await start();
+  t.after(() => server.close());
+  const a = client(), anon = client();
+  assert.equal((await anon("POST", "/api/email-verification/resend", {})).status, 401);
+
+  await a("POST", "/api/register", { email: "r@x.com", name: "R", password: "password123", role: "seeker" });
+  const first = tokenFrom(verifyMails(mails, "r@x.com")[0]);
+
+  // right after sign-up another email is refused
+  assert.equal((await a("POST", "/api/email-verification/resend", {})).status, 429);
+  assert.equal(verifyMails(mails, "r@x.com").length, 1);
+
+  // after the cooldown a new email goes out and the earlier link stops working
+  await db.query("UPDATE email_verifications SET created_at = now() - interval '2 minutes'");
+  assert.equal((await a("POST", "/api/email-verification/resend", {})).status, 200);
+  assert.equal(verifyMails(mails, "r@x.com").length, 2);
+  const second = tokenFrom(verifyMails(mails, "r@x.com")[1]);
+  assert.notEqual(first, second);
+  assert.equal((await anon("POST", "/api/email-verification/confirm", { token: first })).status, 400);
+  assert.equal((await anon("POST", "/api/email-verification/confirm", { token: second })).status, 200);
+
+  // already verified: nothing is sent
+  const r = await a("POST", "/api/email-verification/resend", {});
+  assert.deepEqual(r.body, { ok: true, alreadyVerified: true });
+  assert.equal(verifyMails(mails, "r@x.com").length, 2);
+});
+
+test("completing a password reset also verifies the email address", async (t) => {
+  const { server, client, mails } = await start();
+  t.after(() => server.close());
+  const a = client(), anon = client();
+  await a("POST", "/api/register", { email: "p@x.com", name: "P", password: "password123", role: "seeker" });
+  assert.equal((await a("GET", "/api/me")).body.user.emailVerified, false);
+  await anon("POST", "/api/password-reset/request", { email: "p@x.com" });
+  const token = tokenFrom(mails.find((m) => /Reset/.test(m.subject)));
+  await anon("POST", "/api/password-reset/confirm", { token, password: "brand-new-pass" });
+  const login = await client()("POST", "/api/login", { email: "p@x.com", password: "brand-new-pass" });
+  assert.equal(login.body.emailVerified, true);
 });

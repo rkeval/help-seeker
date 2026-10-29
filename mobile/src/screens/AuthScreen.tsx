@@ -25,7 +25,9 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
       const user: User = mode === "login"
         ? await api.login({ email, password })
         : await api.register({ role, name, email, password });
-      void user;
+      if (mode === "register") {
+        Alert.alert("Check your email", `We sent a confirmation link to ${user.email}. Open it to finish setting up your account.`);
+      }
       onSignedIn();
     } catch (e) {
       Alert.alert("Couldn't continue", (e as Error).message);

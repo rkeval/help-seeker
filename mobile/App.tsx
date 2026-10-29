@@ -55,6 +55,24 @@ function Main() {
     setUser(null); setProfile(null); setTab("find");
   };
 
+  const resendVerification = async () => {
+    try {
+      await api.resendVerification();
+      Alert.alert("Email sent", `We sent a new confirmation link to ${user?.email}. Check your inbox and spam folder.`);
+    } catch (e) {
+      Alert.alert("Couldn't send", (e as Error).message);
+    }
+  };
+  const recheckVerification = async () => {
+    try {
+      const me = await refresh();
+      if (me.user?.emailVerified) Alert.alert("Thanks!", "Your email is confirmed.");
+      else Alert.alert("Not confirmed yet", "Open the link in the email we sent you, then tap this again.");
+    } catch (e) {
+      Alert.alert("Couldn't check", (e as Error).message);
+    }
+  };
+
   if (!ready) return <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}><Loading /></SafeAreaView>;
   if (!meta) {
     return (
@@ -79,10 +97,24 @@ function Main() {
           : <Pressable onPress={() => setTab("auth")}><Text style={{ color: t.accent }}>Sign in</Text></Pressable>}
       </View>
 
+      {user && !user.emailVerified && (
+        <View style={{ margin: 12, padding: 12, gap: 8, borderRadius: 12, borderWidth: 1, borderColor: t.accent, backgroundColor: t.card }}>
+          <Text style={{ color: t.fg }}>
+            {user.role === "housekeeper"
+              ? `Confirm your email (${user.email}) so households can find you and you can answer requests.`
+              : `Confirm your email (${user.email}) to contact housekeepers.`}
+          </Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <View style={{ flex: 1 }}><Button title="Resend email" onPress={resendVerification} /></View>
+            <View style={{ flex: 1 }}><Button kind="ghost" title="I've confirmed" onPress={recheckVerification} /></View>
+          </View>
+        </View>
+      )}
+
       <View style={{ flex: 1 }}>
         {tab === "auth" && !user && <AuthScreen onSignedIn={signedIn} />}
         {(tab === "find" || (tab === "auth" && user)) && <FindScreen user={user} meta={meta} onNeedSignIn={() => setTab("auth")} />}
-        {tab === "profile" && user?.role === "housekeeper" && <ProfileScreen meta={meta} initial={profile} onSaved={() => void refresh()} />}
+        {tab === "profile" && user?.role === "housekeeper" && <ProfileScreen meta={meta} initial={profile} emailVerified={user.emailVerified} onSaved={() => void refresh()} />}
         {tab === "account" && user && (
           <AccountScreen user={user} onSignOut={signOut} onDeleted={() => { setUser(null); setProfile(null); setTab("find"); }} />
         )}

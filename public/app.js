@@ -40,6 +40,13 @@ function renderShell() {
   if (u) tabs.push(["requests", u.role === "housekeeper" ? "Incoming requests" : "My requests"]);
   if (u) tabs.push(["account", "Account"]);
   $("#nav").innerHTML = tabs.map(([id, label]) => `<button data-tab="${id}" class="${id === tab ? "active" : ""}">${label}</button>`).join("");
+  const needsVerify = !!u && !u.emailVerified;
+  $("#verify-banner").hidden = !needsVerify;
+  if (needsVerify) {
+    $("#verify-text").textContent = u.role === "housekeeper"
+      ? `Confirm your email (${u.email}) so households can find you and you can answer requests.`
+      : `Confirm your email (${u.email}) to contact housekeepers.`;
+  }
   for (const s of ["find", "auth", "forgot-section", "account", "profile", "requests"]) $("#" + s).hidden = s !== tab;
 }
 
@@ -57,11 +64,21 @@ async function refreshMe() {
 
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button");
-  if (!b || !(b.dataset.tab || ["signin", "logout", "forgot"].includes(b.id))) return;
+  if (!b || !(b.dataset.tab || ["signin", "logout", "forgot", "resend-verify", "recheck-verify"].includes(b.id))) return;
   try {
     if (b.dataset.tab) return await show(b.dataset.tab);
     if (b.id === "signin") return await show("auth");
     if (b.id === "forgot") return await show("forgot-section");
+    if (b.id === "resend-verify") {
+      await api("POST", "/api/email-verification/resend", {});
+      return flash(`Confirmation email sent to ${me.user.email}. Check your inbox (and spam).`);
+    }
+    if (b.id === "recheck-verify") {
+      await refreshMe();
+      renderShell();
+      if (me.user?.emailVerified) { flash("Thanks, your email is confirmed."); return await show(tab); }
+      return flash("Not confirmed yet. Open the link in the email we sent you.", true);
+    }
     await api("POST", "/api/logout", {});
     me = { user: null }; flash("Signed out.");
     await show("find");
@@ -77,8 +94,8 @@ $("#login-form").addEventListener("submit", guard(async (e) => {
 $("#register-form").addEventListener("submit", guard(async (e) => {
   await api("POST", "/api/register", Object.fromEntries(new FormData(e.target)));
   e.target.reset(); await refreshMe();
-  if (me.user.role === "housekeeper") { flash("Welcome! Fill in your profile so households can find you."); await show("profile"); }
-  else { flash("Welcome!"); await show("find"); }
+  if (me.user.role === "housekeeper") { flash("Welcome! We emailed you a link to confirm your address. Fill in your profile meanwhile."); await show("profile"); }
+  else { flash("Welcome! We emailed you a link to confirm your address."); await show("find"); }
 }));
 
 // ---------- password reset & account deletion ----------
@@ -144,7 +161,8 @@ $("#profile-form").addEventListener("submit", guard(async (e) => {
   body.services = fd.getAll("svc"); delete body.svc;
   body.rate = Number(body.rate); body.exp = Number(body.exp) || 0;
   await api("PUT", "/api/profile", body);
-  await refreshMe(); flash("Profile saved. Households can now find you.");
+  await refreshMe();
+  flash(me.user.emailVerified ? "Profile saved. Households can now find you." : "Profile saved. It will appear in search once you confirm your email.");
 }));
 
 // ---------- requests ----------

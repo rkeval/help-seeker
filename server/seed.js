@@ -13,7 +13,7 @@ const demo = [
   const db = await openDb(process.env.DATABASE_URL);
   for (const [name, email, city, phone, rate, exp, avail, services, bio] of demo) {
     if (await db.one("SELECT 1 FROM users WHERE email = $1", [email])) continue;
-    const u = await db.one("INSERT INTO users (email,name,role,pass_hash) VALUES ($1,$2,'housekeeper',$3) RETURNING id",
+    const u = await db.one("INSERT INTO users (email,name,role,pass_hash,email_verified_at) VALUES ($1,$2,'housekeeper',$3,now()) RETURNING id",
       [email, name, auth.hashPassword("demo-pass-123")]);
     await db.query("INSERT INTO profiles (user_id,city,phone,rate,exp,avail,services,bio) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)",
       [u.id, city, phone, rate, exp, avail, JSON.stringify(services), bio]);

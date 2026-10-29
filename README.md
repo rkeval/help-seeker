@@ -7,6 +7,7 @@ Find a housekeeper (cleaning, dishwashing, cooking, laundry, elder care…). Web
 - **Housekeepers** create an account, fill in a profile, and accept or decline incoming requests.
 - A housekeeper's phone number is hidden until they **accept** your request; after that you can leave a 1–5★ review.
 - Public search never exposes phone numbers or emails.
+- New accounts must **confirm their email** (link valid 24 hours). Until then a user can sign in and browse, but households can't contact anyone, and housekeepers stay out of search results and can't answer requests. Completing a password reset also confirms the address.
 - Password reset by emailed link; users can permanently delete their account (profile, requests and reviews go with it).
 
 Mobile app: [`mobile/`](mobile/README.md) (Expo / React Native, same API).
@@ -37,7 +38,7 @@ Without `TEST_DATABASE_URL` the tests are skipped.
 | `APP_URL` | public base URL, used in password-reset links |
 | `NODE_ENV=production` | marks cookies `Secure`; serve behind HTTPS |
 | `TRUST_PROXY=1` | behind a hosting proxy: use the client IP from `X-Forwarded-For` for rate limiting. Don't set it if the server is directly exposed. |
-| `RESEND_API_KEY`, `MAIL_FROM` | send reset emails through [Resend](https://resend.com) (free tier). Without a key, emails are printed to the server log. |
+| `RESEND_API_KEY`, `MAIL_FROM` | send confirmation and reset emails through [Resend](https://resend.com) (free tier). Without a key, emails are printed to the server log, so in production nobody can confirm their email. Resend's default test sender (`onboarding@resend.dev`) only delivers to your own account's address: to email real users, verify a domain with Resend and set `MAIL_FROM` to an address on it (check Resend's current docs for details). |
 | `DB_POOL_MAX` | max Postgres connections, default 10 (keep it small on free database plans) |
 
 ## Free hosting: Neon (database) + Render (server)
@@ -51,17 +52,22 @@ Your data lives in the hosted Postgres, so it survives server restarts and redep
 | Method | Path | Who |
 |---|---|---|
 | POST | `/api/register`, `/api/login`, `/api/logout` | anyone |
+| POST | `/api/email-verification/confirm` `{token}` | anyone (the link works without signing in) |
+| POST | `/api/email-verification/resend` | signed-in, max one email per minute |
 | POST | `/api/password-reset/request` `{email}`, `/api/password-reset/confirm` `{token, password}` | anyone |
 | POST | `/api/account/delete` `{password}` | signed-in |
 | GET | `/api/me`, `/api/meta`, `/api/housekeepers?service&city&maxRate&avail&sort`, `/healthz` | anyone |
-| PUT | `/api/profile` | housekeeper |
-| POST | `/api/requests` | household |
+| PUT | `/api/profile` | housekeeper (listed in search only once the email is confirmed) |
+| POST | `/api/requests` | household with a confirmed email |
 | GET | `/api/requests` | signed-in (own requests only) |
-| PATCH | `/api/requests/:id` `{status: accepted\|declined}` | housekeeper |
+| PATCH | `/api/requests/:id` `{status: accepted\|declined}` | housekeeper with a confirmed email |
 | POST | `/api/requests/:id/review` `{rating, comment}` | household |
 
 ## Security notes
-Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie (web) or an `Authorization: Bearer` header (mobile, token returned only when the request sends `X-Client: mobile`); login/register/reset are rate-limited per IP (in memory, single process); reset links are single-use, expire after 1 hour and sign the user out everywhere; the reset endpoint answers identically whether or not the email exists; SQL is parameterised; the UI escapes all user text; races (duplicate requests, double answers, reused reset tokens) are settled by the database.
+Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie (web) or an `Authorization: Bearer` header (mobile, token returned only when the request sends `X-Client: mobile`); login/register/reset are rate-limited per IP (in memory, single process); confirmation and reset links are single-use (consumed atomically), stored hashed and expire (24 h / 1 h), expire after 1 hour and sign the user out everywhere; the reset endpoint answers identically whether or not the email exists; SQL is parameterised; the UI escapes all user text; races (duplicate requests, double answers, reused reset tokens) are settled by the database.
+
+## Upgrading an existing database
+The `email_verified_at` column is added automatically, but accounts created before email verification existed start out *unconfirmed*: their housekeepers disappear from search until they confirm (or complete a password reset). If you already have real users, mark them confirmed once with `UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;`.
 
 ## Not yet done
-Email/phone verification, ID/background checks, in-app messaging, payments, database migrations tooling (tables are created with `IF NOT EXISTS`, so later schema changes need a migration step), and a shared rate limiter if you run several instances.
+Phone verification, ID/background checks, in-app messaging, payments, database migrations tooling (tables are created with `IF NOT EXISTS`, so later schema changes need a migration step), and a shared rate limiter if you run several instances.

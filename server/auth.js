@@ -27,7 +27,7 @@ async function createSession(db, userId) {
 async function userFromToken(db, token) {
   if (!token) return null;
   return db.one(
-    `SELECT u.id, u.email, u.name, u.role FROM sessions s
+    `SELECT u.id, u.email, u.name, u.role, u.email_verified_at IS NOT NULL AS "emailVerified" FROM sessions s
      JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now()`,
     [sha256(token)]
   );
