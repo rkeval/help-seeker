@@ -142,7 +142,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   console.log('\n6b. Messages between Sam and Hema');
   await step('Sam opens the chat (empty) and sends a message that contains HTML', async () => {
     await sk.click('[data-tab=requests]'); await sk.click('button[data-chat]'); await sk.waitForSelector('#chat-dlg[open]');
-    assert.match(await sk.textContent('#chat-log'), /No messages yet/); assert.match(await sk.textContent('#chat-title'), /Chat with Hema/);
+    await sk.waitForSelector('#chat-log .empty'); assert.match(await sk.textContent('#chat-log'), /No messages yet/); assert.match(await sk.textContent('#chat-title'), /Chat with Hema/);
     await sk.fill('#chat-form [name=body]', 'Hi Hema! <b>Monday</b> works? <img src=x onerror="window.pwned2=1">');
     await sk.click('#chat-form button[type=submit]'); await sk.waitForSelector('#chat-log .bubble.mine');
     assert.equal(await sk.locator('#chat-log b, #chat-log img').count(), 0, 'message HTML must be shown as text');
