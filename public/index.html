@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Help Seeker – Find a Housekeeper</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="top">
+      <h1>Help Seeker</h1>
+      <div id="who"></div>
+    </div>
+    <p>Find trusted housekeepers for cleaning, dishwashing, cooking and more.</p>
+    <nav id="nav"></nav>
+  </header>
+
+  <main>
+    <p id="msg" class="msg" role="status" hidden></p>
+
+    <section id="find">
+      <form id="filters" class="card">
+        <label>Service <select id="f-service"><option value="">Any</option></select></label>
+        <label>City / area <input id="f-city" placeholder="e.g. Pune"></label>
+        <label>Max rate / hour <input id="f-rate" type="number" min="0" placeholder="Any"></label>
+        <label>Availability <select id="f-avail"><option value="">Any</option></select></label>
+        <label>Sort by
+          <select id="f-sort">
+            <option value="rating">Rating</option>
+            <option value="rate">Lowest rate</option>
+            <option value="exp">Experience</option>
+          </select>
+        </label>
+      </form>
+      <p id="count" class="muted"></p>
+      <div id="results" class="grid"></div>
+    </section>
+
+    <section id="auth" hidden>
+      <div class="grid">
+        <form id="login-form" class="card stack">
+          <h2>Sign in</h2>
+          <label>Email <input name="email" type="email" autocomplete="username" required></label>
+          <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+          <button type="submit">Sign in</button>
+        </form>
+        <form id="register-form" class="card stack">
+          <h2>Create account</h2>
+          <label>I am a
+            <select name="role">
+              <option value="seeker">household looking for help</option>
+              <option value="housekeeper">housekeeper looking for work</option>
+            </select>
+          </label>
+          <label>Name <input name="name" autocomplete="name" required maxlength="100"></label>
+          <label>Email <input name="email" type="email" autocomplete="username" required></label>
+          <label>Password (8+ characters) <input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+          <button type="submit">Create account</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="profile" hidden>
+      <form id="profile-form" class="card stack">
+        <h2>My housekeeper profile</h2>
+        <p class="muted">Your phone number is only shared with households whose request you accept.</p>
+        <label>City / area <input name="city" required maxlength="100"></label>
+        <label>Phone <input name="phone" required pattern="[0-9+\-() ]{7,}" maxlength="30"></label>
+        <label>Rate per hour <input name="rate" type="number" min="0" step="1" required></label>
+        <label>Years of experience <input name="exp" type="number" min="0" step="1" value="0"></label>
+        <label>Availability <select name="avail" id="p-avail"></select></label>
+        <fieldset><legend>Services you offer</legend><div id="svc-checks"></div></fieldset>
+        <label>About you <textarea name="bio" rows="3" maxlength="1000"></textarea></label>
+        <button type="submit">Save profile</button>
+      </form>
+    </section>
+
+    <section id="requests" hidden>
+      <h2 id="req-title">Requests</h2>
+      <div id="req-list" class="stack"></div>
+    </section>
+  </main>
+
+  <dialog id="dlg">
+    <form id="req-form" class="stack">
+      <h3 id="dlg-title"></h3>
+      <label>Your phone <input name="phone" required pattern="[0-9+\-() ]{7,}" maxlength="30"></label>
+      <label>When do you need help? <input name="when" placeholder="e.g. Mon–Fri mornings" maxlength="200"></label>
+      <label>Details <textarea name="note" rows="3" maxlength="1000" placeholder="Tasks, home size, language…"></textarea></label>
+      <div class="row">
+        <button type="button" id="dlg-cancel" class="ghost">Cancel</button>
+        <button type="submit">Send request</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "help-seeker",
+  "version": "0.2.0",
+  "description": "Find housekeepers for cleaning, dishwashing, cooking and more",
+  "private": true,
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "seed": "node --no-warnings server/seed.js",
+    "test": "node --no-warnings --test test/*.test.js"
+  }
+}

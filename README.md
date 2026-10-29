@@ -1,15 +1,37 @@
 # Help Seeker
 
-A tiny static web app for finding a housekeeper (cleaning, dishwashing, cooking, laundry, elder care…).
+Find a housekeeper (cleaning, dishwashing, cooking, laundry, elder care…), with accounts and a real backend.
 
-- **Find**: filter by service, city, max hourly rate and availability; sort by rating, rate or experience.
-- **I'm a housekeeper**: create a profile so households can find you.
-- **Requests**: contact requests you've sent.
-
-Data lives in the browser's `localStorage` (seeded with sample profiles), so there is no backend yet.
+## How it works
+- **Households** create an account, search housekeepers (service, city, max rate, availability) and send a contact request.
+- **Housekeepers** create an account, fill in a profile, and accept or decline incoming requests.
+- A housekeeper's phone number is hidden until they **accept** your request; after that you can leave a 1–5★ review.
+- Public search never exposes phone numbers or emails.
 
 ## Run
-Open `index.html` in a browser, or `python3 -m http.server` and visit http://localhost:8000.
+Requires Node 22.5+ (uses the built-in `node:sqlite`; no npm dependencies).
 
-## Next steps
-Backend + auth, phone/ID verification, reviews, in-app messaging, and payments.
+```sh
+npm start            # http://localhost:3000
+npm run seed         # optional demo housekeepers (password: demo-pass-123)
+npm test
+```
+
+Environment: `PORT` (default 3000), `DB_FILE` (default `data/app.db`), `NODE_ENV=production` (marks cookies `Secure`; serve behind HTTPS).
+
+## API (JSON; state-changing requests need `Content-Type: application/json`)
+| Method | Path | Who |
+|---|---|---|
+| POST | `/api/register`, `/api/login`, `/api/logout` | anyone |
+| GET | `/api/me`, `/api/meta`, `/api/housekeepers?service&city&maxRate&avail&sort` | anyone |
+| PUT | `/api/profile` | housekeeper |
+| POST | `/api/requests` | household |
+| GET | `/api/requests` | signed-in (own requests only) |
+| PATCH | `/api/requests/:id` `{status: accepted\|declined}` | housekeeper |
+| POST | `/api/requests/:id/review` `{rating, comment}` | household |
+
+## Security notes
+Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie; login/register are rate-limited per IP (in memory, single process); SQL is parameterised; the UI escapes all user text.
+
+## Not yet done
+Email/phone verification, password reset, ID/background checks, in-app messaging, payments, and a shared rate limiter if you run several instances.
