@@ -807,3 +807,16 @@ test("sample data: with no ADMIN_EMAIL configured nobody is the owner", async (t
   assert.equal((await c("POST", "/api/admin/sample-data", { action: "add" })).status, 404);
   assert.equal((await c("GET", "/api/me")).body.isAdmin, undefined);
 });
+
+test("sample data: the owner is built in, so no host setting is needed", async (t) => {
+  const prev = process.env.ADMIN_EMAIL; delete process.env.ADMIN_EMAIL;
+  t.after(() => { if (prev !== undefined) process.env.ADMIN_EMAIL = prev; });
+  const { server, client, register } = await start(); // no adminEmail option and no ADMIN_EMAIL
+  t.after(() => server.close());
+  const owner = client(), other = client();
+  await register(owner, { email: "R.Keval@gmail.com", name: "Owner", password: "password123", role: "seeker" });
+  await register(other, { email: "someone@x.com", name: "Someone", password: "password123", role: "seeker" });
+  assert.equal((await owner("GET", "/api/me")).body.isAdmin, true);
+  assert.equal((await other("GET", "/api/me")).body.isAdmin, undefined);
+  assert.equal((await other("POST", "/api/admin/sample-data", { action: "add" })).status, 404);
+});

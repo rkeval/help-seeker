@@ -61,6 +61,9 @@ function makeLimiter(max, windowMs) {
   };
 }
 
+// The owner of this site. Only an account with this address *and a confirmed email* gets the owner-only tools. No setting
+// is needed on the host; ADMIN_EMAIL (even empty = nobody) overrides it.
+const OWNER_EMAIL = "r.keval@gmail.com";
 const RESET_TTL_MS = 60 * 60 * 1000;
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -73,7 +76,7 @@ async function createApp({
   secureCookies = false,
   appUrl = "http://localhost:3000",
   trustProxy = false,
-  adminEmail = process.env.ADMIN_EMAIL,
+  adminEmail = process.env.ADMIN_EMAIL ?? OWNER_EMAIL,
   sendMail = createMailer(),
 } = {}) {
   const db = await openDb(databaseUrl, { schema, migrationUrl });
