@@ -189,7 +189,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await step('only the accepted request offers Messages (the declined one does not)', async () => {
     await sk.click('[data-tab=requests]'); await sk.waitForSelector('.badge.declined'); assert.equal(await sk.locator('button[data-chat]').count(), 1);
   });
-  await step('a housekeeper cannot send requests (no contact buttons shown)', async () => { await rv.click('[data-tab=find]'); await rv.waitForSelector('.hk'); assert.equal(await rv.locator('button[data-hk]').count(), 0); });
+  await step('a housekeeper can hire others too, but her own card says "This is you" with no contact button', async () => {
+    await rv.click('[data-tab=find]'); await rv.waitForSelector('.hk'); const n = await rv.locator('.hk').count();
+    assert.equal(await rv.locator('button[data-hk]').count(), n - 1); assert.equal(await rv.locator('.hk:has-text("This is you")').count(), 1);
+  });
 
   console.log('\n8. Forgot password');
   await step('Sam resets his password; the old session is signed out everywhere', async () => {
@@ -219,7 +222,36 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await sk.click('[data-tab=requests]'); await sk.waitForSelector('#req-list .card'); assert.ok(!(await sk.textContent('#req-list')).includes('Hema'));
   });
 
-  console.log('\n10. Health');
+  console.log('\n10. One person does both (Dana)');
+  const dn = await page();
+  await register(dn, 'both', 'Dana Cruz', 'dana@x.com');
+  await step('signing up as "both" lands on the profile form, and the Requests tab has only the sent list until she offers services', async () => {
+    await dn.waitForSelector('#profile-form:visible'); await confirmEmail('dana@x.com');
+    await dn.click('[data-tab=requests]'); await dn.waitForSelector('#req-list h3:has-text("Requests I sent")');
+    assert.equal(await dn.locator('#req-list h3:has-text("Requests I received")').count(), 0);
+  });
+  await step('Dana saves a profile and the Requests tab now shows both lists', async () => {
+    await dn.click('[data-tab=profile]');
+    await dn.fill('#profile-form [name=city]', 'Kochi'); await dn.fill('#profile-form [name=phone]', '+91 91111 22222');
+    await dn.fill('#profile-form [name=rate]', '70'); await dn.check('[name=svc][value=Cleaning]');
+    await dn.click('#profile-form button[type=submit]'); await dn.waitForSelector('.msg:has-text("Profile saved")');
+    await dn.click('[data-tab=requests]'); await dn.waitForSelector('#req-list h3:has-text("Requests I received")');
+    assert.equal(await dn.locator('#req-list h3:has-text("Requests I sent")').count(), 1);
+  });
+  await step('Dana sees her own card as "This is you" and can hire someone else', async () => {
+    await dn.click('[data-tab=find]'); await dn.fill('#f-city', 'Kochi'); await dn.waitForSelector('#count:has-text("1 housekeeper found")'); await dn.waitForSelector('.hk:has-text("This is you")');
+    assert.equal(await dn.locator('button[data-hk]').count(), 0);
+    await dn.fill('#f-city', 'Delhi'); await dn.waitForSelector('#results button[data-hk]'); await dn.waitForSelector('.hk:has-text("Ravi")'); await dn.click('#results button[data-hk] >> nth=0');
+    await dn.fill('#req-form [name=phone]', '91111 22222'); await dn.click('#req-form button[type=submit]'); await dn.waitForSelector('.msg:has-text("Request sent")');
+  });
+  await step('Sam hires Dana; Dana accepts under "received" and still sees what she sent', async () => {
+    await sk.click('[data-tab=find]'); await sk.fill('#f-city', 'Kochi'); await sk.waitForSelector('#count:has-text("1 housekeeper found")'); await sk.waitForSelector('.hk:has-text("Dana Cruz")'); await sk.click('#results button[data-hk]');
+    await sk.fill('#req-form [name=phone]', '98765 43210'); await sk.click('#req-form button[type=submit]'); await sk.waitForSelector('.msg:has-text("Request sent")');
+    await dn.click('[data-tab=requests]'); await dn.waitForSelector('button[data-act=accepted]'); await dn.click('button[data-act=accepted]'); await dn.waitForSelector('.badge.accepted');
+    assert.equal(await dn.locator('#req-list h3').count(), 2); assert.ok((await dn.textContent('#req-list')).includes('Sam Rivera'));
+  });
+
+  console.log('\n11. Health');
   await step('no browser errors', async () => assert.deepEqual(pageErrors, []));
   await step('server log has no errors or stack traces', async () => {
     const log = fs.readFileSync(LOG, 'utf8'); assert.ok(!/internal error|TypeError|Error:|at .*\.js:\d+/.test(log), log.split('\n').filter(l => /rror/.test(l)).slice(0, 3).join(' | '));

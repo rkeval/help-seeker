@@ -89,12 +89,12 @@ Your data lives in the hosted Postgres, so it survives server restarts and redep
 | POST | `/api/email-verification/resend` | signed-in, max one email per minute |
 | POST | `/api/password-reset/request` `{email}`, `/api/password-reset/confirm` `{token, password}` | anyone |
 | POST | `/api/account/delete` `{password}` | signed-in |
-| GET | `/api/me` (includes `unreadMessages`), `/api/meta`, `/api/housekeepers?service&city&maxRate&avail&sort`, `/healthz` | anyone |
-| PUT | `/api/profile` | housekeeper (listed in search only once the email is confirmed) |
-| POST | `/api/requests` | household with a confirmed email |
-| GET | `/api/requests` | signed-in (own requests only) |
-| PATCH | `/api/requests/:id` `{status: accepted\|declined}` | housekeeper with a confirmed email |
-| POST | `/api/requests/:id/review` `{rating, comment}` | household |
+| GET | `/api/me` (includes `unreadMessages`), `/api/meta`, `/api/housekeepers?service&city&maxRate&avail&sort` (each card has `mine` when signed in), `/healthz` | anyone |
+| PUT | `/api/profile` | any signed-in person (listed in search only once the email is confirmed; one account can both hire and offer services) |
+| POST | `/api/requests` | any signed-in person with a confirmed email (not to themselves) |
+| GET | `/api/requests?as=sent\|received` | signed-in (own requests only). `sent` = ones you made, `received` = ones sent to your housekeeper profile; without `as`, housekeeper-role accounts get `received` and others `sent` (older app builds) |
+| PATCH | `/api/requests/:id` `{status: accepted\|declined}` | the person the request was sent to, confirmed email |
+| POST | `/api/requests/:id/review` `{rating, comment}` | the person who sent the accepted request |
 | GET | `/api/requests/:id/messages?after=<id>` | the two people in an *accepted* request (confirmed email). Marks the other person's messages read. Returns `{with, messages:[{id, mine, body, created_at}]}` |
 | POST | `/api/requests/:id/messages` `{body}` | same; 1–1000 characters, 20 per minute |
 

@@ -5,23 +5,32 @@ import type { HousekeeperRequest, SeekerRequest, User } from "../types";
 import ChatModal from "./ChatModal";
 import { Button, Card, Chip, Loading, Muted, useTheme } from "../ui";
 
-type Row = SeekerRequest | HousekeeperRequest;
+type Item =
+  | { key: string; header: string }
+  | { key: string; empty: true }
+  | { key: string; req: SeekerRequest | HousekeeperRequest };
 
-export default function RequestsScreen({ user, onUnreadChange }: { user: User; onUnreadChange?: () => void }) {
+// Everyone has "sent" requests; people who offer services also have "received" ones.
+export default function RequestsScreen({ offers, onUnreadChange }: { user: User; offers: boolean; onUnreadChange?: () => void }) {
   const t = useTheme();
-  const isHk = user.role === "housekeeper";
-  const [rows, setRows] = useState<Row[] | null>(null);
+  const [rows, setRows] = useState<Item[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [chat, setChat] = useState<{ id: number; name: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setRows(isHk ? await api.housekeeperRequests() : await api.seekerRequests());
+      const sections: [string, string, (SeekerRequest | HousekeeperRequest)[]][] = [];
+      if (offers) sections.push(["received", "Requests I received", await api.housekeeperRequests()]);
+      sections.push(["sent", "Requests I sent", await api.seekerRequests()]);
+      setRows(sections.flatMap(([id, title, list]): Item[] => [
+        { key: "h-" + id, header: title },
+        ...(list.length ? list.map((req) => ({ key: `${id}-${req.id}`, req })) : [{ key: "e-" + id, empty: true as const }]),
+      ]));
     } catch (e) {
       Alert.alert("Couldn't load", (e as Error).message);
       setRows((r) => r ?? []);
     }
-  }, [isHk]);
+  }, [offers]);
   useEffect(() => { void load(); }, [load]);
 
   const act = async (fn: () => Promise<unknown>) => {
@@ -34,12 +43,14 @@ export default function RequestsScreen({ user, onUnreadChange }: { user: User; o
     <>
     <FlatList
       data={rows}
-      keyExtractor={(r) => String(r.id)}
+      keyExtractor={(i) => i.key}
       contentContainerStyle={{ padding: 12, gap: 10 }}
       refreshing={refreshing}
       onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }}
-      ListEmptyComponent={<Muted>Nothing here yet.</Muted>}
-      renderItem={({ item: r }) => {
+      renderItem={({ item }) => {
+        if ("header" in item) return <Text style={{ color: t.fg, fontSize: 18, fontWeight: "700", marginTop: 6 }}>{item.header}</Text>;
+        if ("empty" in item) return <Muted>Nothing here yet.</Muted>;
+        const r = item.req;
         const hkRow = "seeker_name" in r ? r : null;
         const seekerRow = "hk_name" in r ? r : null;
         const phone = hkRow ? hkRow.seeker_phone : seekerRow?.hk_phone;

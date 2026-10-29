@@ -30,7 +30,7 @@ const tokenFor = (email) => {
   const confirmEmail = async (email) => { const r = await fetch(API + '/api/email-verification/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: tokenFor(email) }) }); assert.equal(r.status, 200); };
   const signUp = async (p, role, name, email) => {
     await tapText(p, 'Sign in'); await tapText(p, 'New here? Create an account');
-    await tapText(p, role === 'housekeeper' ? 'Housekeeper' : 'Household');
+    await tapText(p, { housekeeper: 'Housekeeper', both: 'Both' }[role] || 'Household');
     await fill(p, 'Name', name); await fill(p, 'Email', email); await fill(p, 'Password (8+ characters)', 'password123');
     await tapText(p, 'Create account');
   };
@@ -51,7 +51,7 @@ const tokenFor = (email) => {
   await step('sign up as housekeeper → "check your email" → lands on profile with confirm banner', async () => {
     await signUp(mia, 'housekeeper', 'Mia Fernandes', 'mia@x.com');
     await waitAlert(mia, /Check your email: We sent a confirmation link to mia@x.com/);
-    await mia.waitForSelector('text=My housekeeper profile'); assert.ok(await mia.getByText(/Confirm your email \(mia@x.com\) so households can find you/).isVisible());
+    await mia.waitForSelector('text=My housekeeper profile'); assert.ok(await mia.getByText(/Confirm your email \(mia@x.com\) to contact housekeepers and answer requests/).isVisible());
   });
   await step('profile validates on the server (no services) and then saves', async () => {
     await fill(mia, 'City / area', 'Chennai'); await fill(mia, 'Phone', '+91 90000 55555'); await fill(mia, 'Rate per hour (₹)', '110'); await fill(mia, 'Years of experience', '4');
@@ -145,6 +145,19 @@ const tokenFor = (email) => {
     await tapText(mia, 'Sign in'); await fill(mia, 'Email', 'mia@x.com'); await fill(mia, 'Password (8+ characters)', 'wrong-password-1'); await submit();
     await waitAlert(mia, /wrong email or password/);
     await fill(mia, 'Password (8+ characters)', 'password123'); await submit(); await mia.waitForSelector('text=Sign out (Mia Fernandes)');
+  });
+  console.log('\nOne person does both (Zoe)');
+  const zoe = await open();
+  await step('sign up as "Both" → profile first; after saving, Requests shows received and sent sections', async () => {
+    await signUp(zoe, 'both', 'Zoe Khan', 'zoe@x.com');
+    await zoe.waitForSelector('text=My housekeeper profile'); await confirmEmail('zoe@x.com');
+    await fill(zoe, 'City / area', 'Kochi'); await fill(zoe, 'Phone', '+91 90000 77777'); await fill(zoe, 'Rate per hour (₹)', '95');
+    await tapText(zoe, 'Cleaning'); await tapText(zoe, 'Save profile'); await waitAlert(zoe, /Saved/);
+    await tapText(zoe, 'Requests'); await zoe.waitForSelector('text=Requests I received'); await zoe.waitForSelector('text=Requests I sent');
+  });
+  await step('her own card says "This is you" with no contact button; others can still be hired', async () => {
+    await tapText(zoe, 'Find'); await zoe.waitForSelector('text=This is you'); assert.ok(await zoe.getByText('Request contact').count() >= 1);
+    assert.equal(await zoe.getByText('This is you').count(), 1);
   });
   await step('no unexpected errors in the app', async () => assert.deepEqual(errors, []));
   await browser.close();

@@ -80,8 +80,8 @@ export const api = {
   saveProfile: (p: Profile) => call("PUT", "/api/profile", p),
   sendRequest: (b: { housekeeperId: number; phone: string; when: string; note: string }) =>
     call("POST", "/api/requests", b),
-  seekerRequests: () => call<SeekerRequest[]>("GET", "/api/requests"),
-  housekeeperRequests: () => call<HousekeeperRequest[]>("GET", "/api/requests"),
+  seekerRequests: () => call<SeekerRequest[]>("GET", "/api/requests?as=sent"),
+  housekeeperRequests: () => call<HousekeeperRequest[]>("GET", "/api/requests?as=received"),
   answer: (id: number, status: "accepted" | "declined") => call("PATCH", `/api/requests/${id}`, { status }),
   messages: (requestId: number, after: number) =>
     call<{ with: string; messages: ChatMessage[] }>("GET", `/api/requests/${requestId}/messages?after=${after}`),

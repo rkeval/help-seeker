@@ -61,9 +61,9 @@ export default function FindScreen({ user, meta, onNeedSignIn }: { user: User | 
               </View>
               {!!h.bio && <Text style={{ color: t.fg }}>{h.bio}</Text>}
               <Text style={{ color: t.fg, fontWeight: "600" }}>₹{h.rate}/hour</Text>
-              {user?.role !== "housekeeper" && (
-                <Button title="Request contact" onPress={() => (user ? setTarget(h) : onNeedSignIn())} />
-              )}
+              {h.mine
+                ? <Muted>This is you</Muted>
+                : <Button title="Request contact" onPress={() => (user ? setTarget(h) : onNeedSignIn())} />}
             </Card>
           )}
         />

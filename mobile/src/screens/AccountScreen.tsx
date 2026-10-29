@@ -38,7 +38,7 @@ export default function AccountScreen({ user, onSignOut, onDeleted }: { user: Us
     <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
       <Card>
         <Text style={{ color: t.fg, fontSize: 18, fontWeight: "600" }}>{user.name}</Text>
-        <Muted>{user.email} · {user.role === "housekeeper" ? "Housekeeper" : "Household"}</Muted>
+        <Muted>{user.email}</Muted>
         <Button kind="ghost" title="Sign out" onPress={onSignOut} />
       </Card>
 

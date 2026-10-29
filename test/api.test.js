@@ -99,10 +99,11 @@ test("auth rules", async (t) => {
   assert.equal((await a("POST", "/api/register", { email: "bad", name: "x", password: "password123", role: "seeker" })).status, 400);
   assert.equal((await a("POST", "/api/register", { email: "a@x.com", name: "x", password: "short", role: "seeker" })).status, 400);
   assert.equal((await a("POST", "/api/register", { email: "a@x.com", name: "x", password: "password123", role: "admin" })).status, 400);
+  assert.equal((await a("POST", "/api/register", { email: "a@x.com", name: "x", password: "password123", role: "Both" })).status, 400); // exact values only
   assert.equal((await a("POST", "/api/register", { email: "a@x.com", name: "A", password: "password123", role: "seeker" })).status, 201);
   assert.equal((await b("POST", "/api/register", { email: "A@x.com", name: "A", password: "password123", role: "seeker" })).status, 409);
 
-  assert.equal((await a("PUT", "/api/profile", profile)).status, 403); // seekers can't list themselves
+  assert.equal((await a("PUT", "/api/profile", profile)).status, 200); // anyone can add a housekeeper profile: no account is "household only"
 
   assert.equal((await b("POST", "/api/login", { email: "a@x.com", password: "wrong-password" })).status, 401);
   assert.equal((await b("POST", "/api/login", { email: "a@x.com", password: "password123" })).status, 200);
@@ -663,4 +664,87 @@ test("messaging: opening a long conversation shows the latest 200 messages; poll
   // and new messages keep arriving after the newest
   await hk("POST", msgs, { body: "newest" });
   assert.deepEqual(bodies(await s("GET", `${msgs}?after=${open[199].id}`)), ["newest"]);
+});
+
+// ---- one person can be both a household and a housekeeper ----
+test("one person can be both: hire housekeepers and offer their own services from a single account", async (t) => {
+  const { server, client, register } = await start();
+  t.after(() => server.close());
+  const ana = client(), ben = client(), cara = client(), anon = client();
+  const idOf = async (c) => (await c("GET", "/api/me")).body.user.id;
+
+  // Ana signs up as "both"; Ben as a household; Cara as a housekeeper
+  let r = await register(ana, { email: "ana@x.com", name: "Ana", password: "password123", role: "both" });
+  assert.equal(r.status, 201); assert.equal(r.body.role, "housekeeper"); // "both" is only a sign-up choice
+  await register(ben, { email: "ben@x.com", name: "Ben", password: "password123", role: "seeker" });
+  await register(cara, { email: "cara@x.com", name: "Cara", password: "password123", role: "housekeeper" });
+  assert.equal((await ben("GET", "/api/me")).body.profile, null);
+
+  // anyone can offer services, including someone who signed up as a household
+  assert.equal((await ana("PUT", "/api/profile", { ...profile, city: "Pune" })).status, 200);
+  assert.equal((await ben("PUT", "/api/profile", { ...profile, city: "Delhi", rate: 90 })).status, 200);
+  assert.equal((await cara("PUT", "/api/profile", { ...profile, city: "Goa" })).status, 200);
+  assert.equal((await ben("GET", "/api/me")).body.profile.city, "Delhi"); // a household's profile comes back from /api/me
+  const [anaId, benId, caraId] = [await idOf(ana), await idOf(ben), await idOf(cara)];
+  assert.deepEqual((await anon("GET", "/api/housekeepers")).body.map((h) => h.name).sort(), ["Ana", "Ben", "Cara"]);
+
+  // `mine` marks your own card; nobody is "mine" for a visitor who isn't signed in
+  const mineOf = async (c) => (await c("GET", "/api/housekeepers")).body.filter((h) => h.mine).map((h) => h.name);
+  assert.deepEqual(await mineOf(ana), ["Ana"]);
+  assert.deepEqual(await mineOf(ben), ["Ben"]);
+  assert.deepEqual(await mineOf(anon), []);
+
+  // nobody can hire themselves, and nothing is created by trying
+  r = await ana("POST", "/api/requests", { housekeeperId: anaId, phone: "1234567" });
+  assert.equal(r.status, 400); assert.match(r.body.error, /yourself/);
+
+  // a housekeeper can hire (Cara hires Ana), and a household that now offers services can accept work (Ben)
+  assert.equal((await cara("POST", "/api/requests", { housekeeperId: anaId, phone: "1111111", note: "from Cara" })).status, 201);
+  assert.equal((await ana("POST", "/api/requests", { housekeeperId: benId, phone: "2222222", note: "from Ana" })).status, 201);
+  assert.equal((await ben("POST", "/api/requests", { housekeeperId: caraId, phone: "3333333", note: "from Ben" })).status, 201);
+
+  // Ana is both: the two lists never mix
+  const sent = (await ana("GET", "/api/requests?as=sent")).body;
+  const received = (await ana("GET", "/api/requests?as=received")).body;
+  assert.deepEqual(sent.map((x) => x.hk_name), ["Ben"]);
+  assert.deepEqual(received.map((x) => x.seeker_name), ["Cara"]);
+  assert.equal((await ana("GET", "/api/requests?as=bogus")).status, 400);
+  // older app builds ask without `as`: they still get the list that matches the sign-up choice
+  assert.deepEqual((await ana("GET", "/api/requests")).body.map((x) => x.seeker_name), ["Cara"]);
+  assert.deepEqual((await ben("GET", "/api/requests")).body.map((x) => x.hk_name), ["Cara"]);
+
+  // each side of each request can only act on its own side of it
+  const toAna = received[0].id, toBen = sent[0].id;
+  assert.equal((await ben("PATCH", `/api/requests/${toAna}`, { status: "accepted" })).status, 404);   // not Ben's request to answer
+  assert.equal((await cara("PATCH", `/api/requests/${toAna}`, { status: "accepted" })).status, 404);  // the hirer can't answer for the housekeeper
+  assert.equal((await ana("PATCH", `/api/requests/${toBen}`, { status: "accepted" })).status, 404);   // Ana is the hirer of this one
+  assert.equal((await ana("PATCH", `/api/requests/${toAna}`, { status: "accepted" })).status, 200);   // her request as housekeeper
+  assert.equal((await ben("PATCH", `/api/requests/${toBen}`, { status: "accepted" })).status, 200);   // Ben, a household, accepts work
+
+  // phone numbers follow the usual rule on both sides
+  assert.equal((await cara("GET", "/api/requests?as=sent")).body[0].hk_phone, profile.phone);
+  assert.equal((await ana("GET", "/api/requests?as=sent")).body[0].hk_phone, profile.phone);
+
+  // messages: Ana talks in both conversations, each stays private to its two people
+  const toAnaMsgs = `/api/requests/${toAna}/messages`, toBenMsgs = `/api/requests/${toBen}/messages`;
+  assert.equal((await cara("POST", toAnaMsgs, { body: "Hi Ana (worker)" })).status, 201);
+  assert.equal((await ana("POST", toBenMsgs, { body: "Hi Ben (I'm hiring you)" })).status, 201);
+  assert.equal((await ana("GET", "/api/me")).body.unreadMessages, 1);   // Cara's message
+  assert.equal((await ben("GET", "/api/me")).body.unreadMessages, 1);   // Ana's message
+  assert.equal((await ben("GET", toAnaMsgs)).status, 404);              // Ben isn't in Cara's conversation with Ana
+  assert.deepEqual((await ana("GET", toAnaMsgs)).body.messages.map((m) => [m.body, m.mine]), [["Hi Ana (worker)", false]]);
+  assert.deepEqual((await ana("GET", toBenMsgs)).body.messages.map((m) => [m.body, m.mine]), [["Hi Ben (I'm hiring you)", true]]);
+
+  // reviews only by the hirer of that request, and they land on the right person's card
+  assert.equal((await ana("POST", `/api/requests/${toAna}/review`, { rating: 5 })).status, 404);  // Ana was the worker here
+  assert.equal((await cara("POST", `/api/requests/${toAna}/review`, { rating: 4 })).status, 201);
+  assert.equal((await ana("POST", `/api/requests/${toBen}/review`, { rating: 2 })).status, 201);
+  const cards = Object.fromEntries((await anon("GET", "/api/housekeepers")).body.map((h) => [h.name, h.rating]));
+  assert.deepEqual(cards, { Ana: 4, Ben: 2, Cara: null });
+
+  // deleting a "both" account removes both of its sides
+  assert.equal((await ana("POST", "/api/account/delete", { password: "password123" })).status, 200);
+  assert.deepEqual((await cara("GET", "/api/requests?as=sent")).body, []);
+  assert.deepEqual((await ben("GET", "/api/requests?as=received")).body, []);
+  assert.deepEqual((await anon("GET", "/api/housekeepers")).body.map((h) => h.name).sort(), ["Ben", "Cara"]);
 });
