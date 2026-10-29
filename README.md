@@ -17,7 +17,18 @@ npm run seed         # optional demo housekeepers (password: demo-pass-123)
 npm test
 ```
 
-Environment: `PORT` (default 3000), `DB_FILE` (default `data/app.db`), `NODE_ENV=production` (marks cookies `Secure`; serve behind HTTPS).
+Environment:
+
+| Variable | Purpose |
+|---|---|
+| `PORT` | default 3000 |
+| `DB_FILE` | SQLite file, default `data/app.db` |
+| `NODE_ENV=production` | marks cookies `Secure`; serve behind HTTPS |
+| `APP_URL` | public base URL, used in password-reset links (e.g. `https://helpseeker.example.com`) |
+| `RESEND_API_KEY`, `MAIL_FROM` | send reset emails through [Resend](https://resend.com) (free tier). Without a key, emails are printed to the server log. |
+
+### Database and hosting
+The database is a single SQLite file, which costs nothing. It must live on a **persistent disk**: most free app hosts (Render/Koyeb free tiers, Heroku-style dynos) wipe the filesystem on every restart or deploy, which would erase all accounts. Use a host with a persistent volume, or move to a free hosted Postgres.
 
 ## Mobile app
 Android and iPhone app in [`mobile/`](mobile/README.md) (Expo / React Native) using the same API.
@@ -26,6 +37,8 @@ Android and iPhone app in [`mobile/`](mobile/README.md) (Expo / React Native) us
 | Method | Path | Who |
 |---|---|---|
 | POST | `/api/register`, `/api/login`, `/api/logout` | anyone |
+| POST | `/api/password-reset/request` `{email}`, `/api/password-reset/confirm` `{token, password}` | anyone |
+| POST | `/api/account/delete` `{password}` | signed-in |
 | GET | `/api/me`, `/api/meta`, `/api/housekeepers?service&city&maxRate&avail&sort` | anyone |
 | PUT | `/api/profile` | housekeeper |
 | POST | `/api/requests` | household |
@@ -34,7 +47,7 @@ Android and iPhone app in [`mobile/`](mobile/README.md) (Expo / React Native) us
 | POST | `/api/requests/:id/review` `{rating, comment}` | household |
 
 ## Security notes
-Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie (web) or an `Authorization: Bearer` header (mobile, token returned only when the request sends `X-Client: mobile`); login/register are rate-limited per IP (in memory, single process); SQL is parameterised; the UI escapes all user text.
+Passwords hashed with scrypt; sessions are random tokens stored hashed, sent in an `HttpOnly; SameSite=Lax` cookie (web) or an `Authorization: Bearer` header (mobile, token returned only when the request sends `X-Client: mobile`); login/register/reset are rate-limited; reset links are single-use, expire after 1 hour and sign the user out everywhere; the reset endpoint answers identically whether or not the email exists per IP (in memory, single process); SQL is parameterised; the UI escapes all user text.
 
 ## Not yet done
-Account deletion (required by the app stores), email/phone verification, password reset, ID/background checks, in-app messaging, payments, and a shared rate limiter if you run several instances.
+Email/phone verification, ID/background checks, in-app messaging, payments, and a shared rate limiter if you run several instances.

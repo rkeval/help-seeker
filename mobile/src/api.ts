@@ -48,6 +48,11 @@ export const api = {
   async logout() {
     try { await call("POST", "/api/logout", {}); } finally { await saveToken(null); }
   },
+  requestPasswordReset: (email: string) => call<{ message: string }>("POST", "/api/password-reset/request", { email }),
+  async deleteAccount(password: string) {
+    await call("POST", "/api/account/delete", { password });
+    await saveToken(null);
+  },
   me: () => call<{ user: User | null; profile: Profile | null }>("GET", "/api/me"),
   meta: () => call<Meta>("GET", "/api/meta"),
   housekeepers: (q: Record<string, string>) =>

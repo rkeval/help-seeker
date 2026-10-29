@@ -38,8 +38,9 @@ function renderShell() {
   const tabs = [["find", "Find a housekeeper"]];
   if (u?.role === "housekeeper") tabs.push(["profile", "My profile"]);
   if (u) tabs.push(["requests", u.role === "housekeeper" ? "Incoming requests" : "My requests"]);
+  if (u) tabs.push(["account", "Account"]);
   $("#nav").innerHTML = tabs.map(([id, label]) => `<button data-tab="${id}" class="${id === tab ? "active" : ""}">${label}</button>`).join("");
-  for (const s of ["find", "auth", "profile", "requests"]) $("#" + s).hidden = s !== tab;
+  for (const s of ["find", "auth", "forgot-section", "account", "profile", "requests"]) $("#" + s).hidden = s !== tab;
 }
 
 async function show(next) {
@@ -56,10 +57,11 @@ async function refreshMe() {
 
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("button");
-  if (!b || !(b.dataset.tab || b.id === "signin" || b.id === "logout")) return;
+  if (!b || !(b.dataset.tab || ["signin", "logout", "forgot"].includes(b.id))) return;
   try {
     if (b.dataset.tab) return await show(b.dataset.tab);
     if (b.id === "signin") return await show("auth");
+    if (b.id === "forgot") return await show("forgot-section");
     await api("POST", "/api/logout", {});
     me = { user: null }; flash("Signed out.");
     await show("find");
@@ -77,6 +79,18 @@ $("#register-form").addEventListener("submit", guard(async (e) => {
   e.target.reset(); await refreshMe();
   if (me.user.role === "housekeeper") { flash("Welcome! Fill in your profile so households can find you."); await show("profile"); }
   else { flash("Welcome!"); await show("find"); }
+}));
+
+// ---------- password reset & account deletion ----------
+$("#forgot-form").addEventListener("submit", guard(async (e) => {
+  const r = await api("POST", "/api/password-reset/request", Object.fromEntries(new FormData(e.target)));
+  e.target.reset(); flash(r.message);
+}));
+$("#delete-form").addEventListener("submit", guard(async (e) => {
+  if (!confirm("Permanently delete your account? This can't be undone.")) return;
+  await api("POST", "/api/account/delete", Object.fromEntries(new FormData(e.target)));
+  e.target.reset(); me = { user: null };
+  await show("find"); flash("Your account has been deleted.");
 }));
 
 // ---------- search ----------

@@ -18,7 +18,7 @@ Emulators work without the env var: Android emulator uses `http://10.0.2.2:3000`
 2. Change `ios.bundleIdentifier` / `android.package` in `app.json` to an id you own.
 3. Build with EAS: `npx eas-cli build --platform all`, then `npx eas-cli submit`.
    You need an Apple Developer account (US$99/yr) and a Google Play developer account (US$25 one-off).
-   App Store review also requires a privacy policy and, because accounts can be created in-app, an in-app way to delete an account (not built yet).
+   App Store review also requires a privacy policy. In-app account deletion (Account tab) is already built.
 
 ## Scripts
 `npm run typecheck` · `npx expo export --platform all` (verifies the bundles build)

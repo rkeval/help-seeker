@@ -37,3 +37,5 @@ dialog::backdrop { background:rgba(0,0,0,.5); }
 .actions { display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap; }
 .actions select { width:auto; }
 [hidden] { display:none !important; }
+button.danger { background:#d92d20; }
+button.link { background:none; color:var(--accent); padding:0; text-align:left; }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { api, loadToken } from "./src/api";
+import AccountScreen from "./src/screens/AccountScreen";
 import AuthScreen from "./src/screens/AuthScreen";
 import FindScreen from "./src/screens/FindScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
@@ -10,7 +11,7 @@ import RequestsScreen from "./src/screens/RequestsScreen";
 import type { Meta, Profile, User } from "./src/types";
 import { Button, Loading, useTheme } from "./src/ui";
 
-type Tab = "find" | "profile" | "requests" | "auth";
+type Tab = "find" | "profile" | "requests" | "account" | "auth";
 
 export default function App() {
   return <SafeAreaProvider><Main /></SafeAreaProvider>;
@@ -66,7 +67,7 @@ function Main() {
 
   const tabs: [Tab, string][] = [["find", "Find"]];
   if (user?.role === "housekeeper") tabs.push(["profile", "Profile"]);
-  if (user) tabs.push(["requests", "Requests"]);
+  if (user) tabs.push(["requests", "Requests"], ["account", "Account"]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
@@ -82,6 +83,9 @@ function Main() {
         {tab === "auth" && !user && <AuthScreen onSignedIn={signedIn} />}
         {(tab === "find" || (tab === "auth" && user)) && <FindScreen user={user} meta={meta} onNeedSignIn={() => setTab("auth")} />}
         {tab === "profile" && user?.role === "housekeeper" && <ProfileScreen meta={meta} initial={profile} onSaved={() => void refresh()} />}
+        {tab === "account" && user && (
+          <AccountScreen user={user} onSignOut={signOut} onDeleted={() => { setUser(null); setProfile(null); setTab("find"); }} />
+        )}
         {tab === "requests" && user && <RequestsScreen key={user.id} user={user} />}
       </View>
 

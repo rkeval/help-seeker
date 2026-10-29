@@ -6,7 +6,7 @@ import { Button, Chip, Field, Muted, useTheme } from "../ui";
 
 export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const t = useTheme();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
   const [role, setRole] = useState<Role>("seeker");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -16,6 +16,12 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const submit = async () => {
     setBusy(true);
     try {
+      if (mode === "forgot") {
+        const r = await api.requestPasswordReset(email);
+        Alert.alert("Check your email", `${r.message}\n\nOpen the link on this phone, choose a new password, then sign in here.`);
+        setMode("login");
+        return;
+      }
       const user: User = mode === "login"
         ? await api.login({ email, password })
         : await api.register({ role, name, email, password });
@@ -44,12 +50,15 @@ export default function AuthScreen({ onSignedIn }: { onSignedIn: () => void }) {
         </View>
       )}
       <Field label="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email" />
-      <Field label="Password (8+ characters)" value={password} onChangeText={setPassword} secureTextEntry autoComplete={mode === "login" ? "current-password" : "new-password"} />
+      {mode !== "forgot" && (
+        <Field label="Password (8+ characters)" value={password} onChangeText={setPassword} secureTextEntry autoComplete={mode === "login" ? "current-password" : "new-password"} />
+      )}
 
-      <Button title={mode === "login" ? "Sign in" : "Create account"} onPress={submit} disabled={busy} />
+      <Button title={mode === "login" ? "Sign in" : mode === "register" ? "Create account" : "Send reset link"} onPress={submit} disabled={busy} />
+      {mode === "login" && <Button kind="ghost" title="Forgot password?" onPress={() => setMode("forgot")} />}
       <Button
         kind="ghost"
-        title={mode === "login" ? "New here? Create an account" : "Have an account? Sign in"}
+        title={mode === "register" ? "Have an account? Sign in" : mode === "forgot" ? "Back to sign in" : "New here? Create an account"}
         onPress={() => setMode(mode === "login" ? "register" : "login")}
       />
     </ScrollView>

@@ -41,6 +41,10 @@ function destroySession(db, token) {
   if (token) db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
 }
 
+function destroyAllSessions(db, userId) {
+  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+}
+
 function parseCookies(header = "") {
   const out = {};
   for (const part of header.split(";")) {
@@ -56,4 +60,4 @@ function sessionCookie(token, secure) {
   return `sid=${token || ""}; ${attrs.join("; ")}`;
 }
 
-module.exports = { hashPassword, verifyPassword, createSession, userFromToken, destroySession, parseCookies, sessionCookie };
+module.exports = { sha256, destroyAllSessions, hashPassword, verifyPassword, createSession, userFromToken, destroySession, parseCookies, sessionCookie };

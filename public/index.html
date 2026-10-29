@@ -44,6 +44,7 @@
           <label>Email <input name="email" type="email" autocomplete="username" required></label>
           <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
           <button type="submit">Sign in</button>
+          <button type="button" class="link" id="forgot">Forgot password?</button>
         </form>
         <form id="register-form" class="card stack">
           <h2>Create account</h2>
@@ -59,6 +60,25 @@
           <button type="submit">Create account</button>
         </form>
       </div>
+    </section>
+
+    <section id="forgot-section" hidden>
+      <form id="forgot-form" class="card stack">
+        <h2>Reset your password</h2>
+        <p class="muted">Enter your email and we'll send you a link to choose a new password.</p>
+        <label>Email <input name="email" type="email" autocomplete="username" required></label>
+        <button type="submit">Send reset link</button>
+        <button type="button" class="ghost" data-tab="auth">Back to sign in</button>
+      </form>
+    </section>
+
+    <section id="account" hidden>
+      <form id="delete-form" class="card stack">
+        <h2>Delete my account</h2>
+        <p>This permanently deletes your account, profile, requests and reviews. It can't be undone.</p>
+        <label>Confirm with your password <input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit" class="danger">Delete my account</button>
+      </form>
     </section>
 
     <section id="profile" hidden>

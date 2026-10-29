@@ -3,6 +3,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const auth = require("./auth");
 const { openDb } = require("./db");
+const { createMailer } = require("./mail");
+const crypto = require("node:crypto");
 
 const SERVICES = ["Cleaning", "Dishwashing", "Cooking", "Laundry", "Ironing", "Grocery shopping", "Child care", "Elder care"];
 const AVAIL = ["Full-time", "Part-time", "Weekends"];
@@ -51,7 +53,9 @@ function makeLimiter(max, windowMs) {
   };
 }
 
-function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secureCookies = false } = {}) {
+const RESET_TTL_MS = 60 * 60 * 1000;
+
+function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secureCookies = false, appUrl = "http://localhost:3000", sendMail = createMailer() } = {}) {
   const db = openDb(dbFile);
   const limitAuth = makeLimiter(20, 15 * 60 * 1000);
 
@@ -101,6 +105,57 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
     setToken(null);
     return { ok: true };
   });
+
+  // Always answers the same way so the endpoint can't be used to discover which emails have accounts.
+  route("POST", "/api/password-reset/request", async ({ body, ip }) => {
+    limitAuth(ip);
+    const email = str(body.email, 200).toLowerCase();
+    const user = db.prepare("SELECT id, email FROM users WHERE email = ?").get(email);
+    if (user) {
+      const token = crypto.randomBytes(32).toString("base64url");
+      db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(user.id);
+      db.prepare("INSERT INTO password_resets (token_hash,user_id,expires_at) VALUES (?,?,?)")
+        .run(auth.sha256(token), user.id, Date.now() + RESET_TTL_MS);
+      const link = `${appUrl.replace(/\/$/, "")}/reset.html?token=${token}`;
+      try {
+        await sendMail({
+          to: user.email,
+          subject: "Reset your Help Seeker password",
+          text: `Use this link within 1 hour to choose a new password:\n\n${link}\n\nIf you didn't ask for this, ignore this email.`,
+        });
+      } catch (e) {
+        console.error("password reset email failed:", e.message);
+      }
+    }
+    return { ok: true, message: "If that email has an account, a reset link is on its way." };
+  });
+
+  route("POST", "/api/password-reset/confirm", async ({ body, ip }) => {
+    limitAuth(ip);
+    const password = typeof body.password === "string" ? body.password : "";
+    if (password.length < 8 || password.length > 200) throw bad("password must be 8–200 characters");
+    const token = typeof body.token === "string" ? body.token : "";
+    const row = db.prepare("SELECT * FROM password_resets WHERE token_hash = ?").get(auth.sha256(token));
+    if (!row || row.expires_at < Date.now()) {
+      if (row) db.prepare("DELETE FROM password_resets WHERE token_hash = ?").run(row.token_hash);
+      throw bad("this reset link is invalid or has expired");
+    }
+    db.prepare("UPDATE users SET pass_hash = ? WHERE id = ?").run(auth.hashPassword(password), row.user_id);
+    db.prepare("DELETE FROM password_resets WHERE user_id = ?").run(row.user_id);
+    auth.destroyAllSessions(db, row.user_id); // anyone holding an old session is signed out
+    return { ok: true };
+  });
+
+  // Permanently deletes the account and, via ON DELETE CASCADE, its profile, sessions, requests and reviews.
+  route("POST", "/api/account/delete", async ({ user, body, setToken }) => {
+    const row = db.prepare("SELECT pass_hash FROM users WHERE id = ?").get(user.id);
+    if (typeof body.password !== "string" || !auth.verifyPassword(body.password, row.pass_hash)) {
+      throw new HttpError(403, "wrong password");
+    }
+    db.prepare("DELETE FROM users WHERE id = ?").run(user.id);
+    setToken(null);
+    return { ok: true };
+  }, { auth: true });
 
   route("GET", "/api/me", async ({ user }) => {
     if (!user) return { user: null };
@@ -218,7 +273,7 @@ function createApp({ dbFile = path.join(__dirname, "..", "data", "app.db"), secu
     if (matched.needAuth && !user) throw new HttpError(401, "sign in required");
     if (matched.role && user.role !== matched.role) throw new HttpError(403, `only ${matched.role}s can do this`);
 
-    const body = ["POST", "PUT", "PATCH"].includes(req.method) ? await readJson(req) : {};
+    const body = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) ? await readJson(req) : {};
     const out = await matched.handler({ user, body, params, query: url.searchParams, token, setToken, ip: req.socket.remoteAddress });
     let [status, payload] = Array.isArray(out) && typeof out[0] === "number" ? out : [200, out];
     // Native apps can't rely on cookies: hand them the session token in the body. Browsers never get it

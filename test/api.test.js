@@ -2,8 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createApp } = require("../server/app");
 
-async function start() {
-  const { server } = createApp({ dbFile: ":memory:" });
+async function start(opts = {}) {
+  const { server, db } = createApp({ dbFile: ":memory:", sendMail: async () => {}, ...opts });
   await new Promise((r) => server.listen(0, r));
   const base = `http://localhost:${server.address().port}`;
   // tiny client that keeps a cookie jar per "browser"
@@ -22,7 +22,7 @@ async function start() {
       return { status: res.status, body: json, headers: res.headers };
     };
   };
-  return { server, client };
+  return { server, client, db };
 }
 
 const profile = { city: "Pune", phone: "+91 98000 11111", rate: 150, exp: 4, avail: "Full-time", services: ["Cleaning", "Cooking"], bio: "hi" };
@@ -146,4 +146,87 @@ test("mobile clients authenticate with a bearer token, browsers never get one", 
   assert.equal(res.status, 200);
   res = await fetch(base + "/api/me", { headers: { Authorization: `Bearer ${token}` } });
   assert.equal((await res.json()).user, null);
+});
+
+test("password reset: emailed single-use link, revokes sessions, no account enumeration", async (t) => {
+  const mails = [];
+  const { server, client, db } = await start({ appUrl: "https://app.test", sendMail: async (m) => mails.push(m) });
+  t.after(() => server.close());
+  const a = client(), other = client(), anon = client();
+  await a("POST", "/api/register", { email: "r@x.com", name: "R", password: "old-password-1", role: "seeker" });
+
+  const known = await anon("POST", "/api/password-reset/request", { email: "R@x.com" });
+  const unknown = await anon("POST", "/api/password-reset/request", { email: "nobody@x.com" });
+  assert.deepEqual(known.body, unknown.body); // identical answer either way
+  assert.equal(mails.length, 1);
+  assert.equal(mails[0].to, "r@x.com");
+  const token = /reset\.html\?token=([\w-]+)/.exec(mails[0].text)[1];
+  assert.match(mails[0].text, /^Use this link/);
+  assert.ok(mails[0].text.includes("https://app.test/reset.html"));
+
+  assert.equal((await anon("POST", "/api/password-reset/confirm", { token: "bogus", password: "new-password-1" })).status, 400);
+  assert.equal((await anon("POST", "/api/password-reset/confirm", { token, password: "short" })).status, 400);
+  assert.equal((await anon("POST", "/api/password-reset/confirm", { token, password: "new-password-1" })).status, 200);
+  assert.equal((await anon("POST", "/api/password-reset/confirm", { token, password: "another-pass-1" })).status, 400); // single use
+
+  assert.equal((await a("GET", "/api/me")).body.user, null); // old session revoked
+  assert.equal((await other("POST", "/api/login", { email: "r@x.com", password: "old-password-1" })).status, 401);
+  assert.equal((await other("POST", "/api/login", { email: "r@x.com", password: "new-password-1" })).status, 200);
+
+  // expired token
+  await anon("POST", "/api/password-reset/request", { email: "r@x.com" });
+  const t2 = /token=([\w-]+)/.exec(mails[1].text)[1];
+  db.prepare("UPDATE password_resets SET expires_at = ?").run(Date.now() - 1000);
+  assert.equal((await anon("POST", "/api/password-reset/confirm", { token: t2, password: "new-password-2" })).status, 400);
+
+  // a new request replaces the earlier link
+  await anon("POST", "/api/password-reset/request", { email: "r@x.com" });
+  await anon("POST", "/api/password-reset/request", { email: "r@x.com" });
+  const [first, second] = [mails[2], mails[3]].map((m) => /token=([\w-]+)/.exec(m.text)[1]);
+  assert.equal((await anon("POST", "/api/password-reset/confirm", { token: first, password: "new-password-3" })).status, 400);
+  assert.equal((await anon("POST", "/api/password-reset/confirm", { token: second, password: "new-password-3" })).status, 200);
+});
+
+test("a failing mail provider doesn't change the response or crash", async (t) => {
+  const { server, client } = await start({ sendMail: async () => { throw new Error("boom"); } });
+  t.after(() => server.close());
+  const a = client();
+  await a("POST", "/api/register", { email: "f@x.com", name: "F", password: "password123", role: "seeker" });
+  const r = await a("POST", "/api/password-reset/request", { email: "f@x.com" });
+  assert.equal(r.status, 200);
+});
+
+test("account deletion removes the user and everything attached to them", async (t) => {
+  const { server, client, db } = await start();
+  t.after(() => server.close());
+  const hk = client(), s = client(), anon = client();
+  await hk("POST", "/api/register", { email: "h@x.com", name: "H", password: "password123", role: "housekeeper" });
+  await hk("PUT", "/api/profile", profile);
+  await s("POST", "/api/register", { email: "s@x.com", name: "S", password: "password123", role: "seeker" });
+  const hkId = (await anon("GET", "/api/housekeepers")).body[0].id;
+  await s("POST", "/api/requests", { housekeeperId: hkId, phone: "1234567" });
+  const reqId = (await hk("GET", "/api/requests")).body[0].id;
+  await hk("PATCH", `/api/requests/${reqId}`, { status: "accepted" });
+  await s("POST", `/api/requests/${reqId}/review`, { rating: 5 });
+
+  assert.equal((await anon("POST", "/api/account/delete", { password: "password123" })).status, 401);
+  assert.equal((await hk("POST", "/api/account/delete", { password: "wrong-password" })).status, 403);
+  assert.equal((await hk("POST", "/api/account/delete", {})).status, 403);
+  assert.equal((await hk("GET", "/api/me")).body.user.email, "h@x.com"); // still there
+
+  const del = await hk("POST", "/api/account/delete", { password: "password123" });
+  assert.equal(del.status, 200);
+  assert.match(del.headers.get("set-cookie"), /Max-Age=0/);
+
+  assert.equal((await hk("GET", "/api/me")).body.user, null);
+  assert.equal((await anon("GET", "/api/housekeepers")).body.length, 0);
+  assert.equal((await hk("POST", "/api/login", { email: "h@x.com", password: "password123" })).status, 401);
+  for (const table of ["profiles", "requests", "reviews", "sessions"]) {
+    const where = table === "sessions" ? "user_id" : table === "profiles" ? "user_id" : null;
+    if (where) assert.equal(db.prepare(`SELECT COUNT(*) n FROM ${table} WHERE ${where} = ?`).get(hkId).n, 0, table);
+  }
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM requests").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM reviews").get().n, 0);
+  assert.deepEqual((await s("GET", "/api/requests")).body, []); // the household survives, request is gone
+  assert.equal((await s("GET", "/api/me")).body.user.email, "s@x.com");
 });
